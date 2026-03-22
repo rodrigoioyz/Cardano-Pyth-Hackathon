@@ -4,12 +4,14 @@ import {
   applyParamsToScript,
   serializePlutusScript,
   resolvePlutusScriptHash,
+  serializeRewardAddress,
   deserializeAddress,
   mConStr0,
   mConStr1,
   type UTxO,
   type BrowserWallet,
 } from "@meshsdk/core";
+import { getPythScriptHash } from "@pythnetwork/pyth-lazer-cardano-js";
 
 import {
   UNPARAMETERISED_SCRIPT_CBOR,
@@ -70,6 +72,17 @@ export async function buildBurnTx(
   if (pythUtxos.length === 0) throw new Error("Pyth State NFT UTxO not found");
   const stateUtxo = pythUtxos[0];
 
+  // Read the withdraw script hash dynamically from the Pyth State inline datum.
+  const withdrawScriptHash = getPythScriptHash(stateUtxo as any);
+  const withdrawAddress = serializeRewardAddress(withdrawScriptHash, true, 0);
+
+  // Find the UTxO at the Pyth State address that has the withdraw script published as a reference script.
+  const allPythUtxos: UTxO[] = await provider.fetchAddressUTxOs(PYTH.STATE_ADDRESS);
+  const withdrawRefUtxo = allPythUtxos.find(
+    (u) => u.output.scriptHash === withdrawScriptHash
+  );
+  if (!withdrawRefUtxo) throw new Error("Pyth withdraw reference script UTxO not found");
+
   // User UTxOs — for synth token input and collateral.
   const walletUtxos: UTxO[] = await wallet.getUtxos();
   const collateral: UTxO[] = await wallet.getCollateral();
@@ -93,10 +106,18 @@ export async function buildBurnTx(
 
   // ── 3. Build datums and redeemers ─────────────────────────────────────────
 
-  // Keep the existing pool datum (owner stays the same).
-  // In Mesh "Data" format: ByteArray is a plain hex string, Constr is mConStr0.
-  const ownerPkh = deserializeAddress(walletAddress).pubKeyHash;
-  const poolDatum = mConStr0([ownerPkh]);
+  // Read owner PKH from the pool datum — this is what the validator checks.
+  // PoolDatum is Constr(0, [owner_pkh_hex]).
+  const datumOwnerPkh: string = (poolUtxo.output.plutusData as any)?.fields?.[0] ?? "";
+  if (!datumOwnerPkh) throw new Error("Could not read owner from pool datum");
+
+  // Fail fast if the connected wallet is not the position owner.
+  const walletPkh = deserializeAddress(walletAddress).pubKeyHash;
+  if (walletPkh !== datumOwnerPkh)
+    throw new Error("Connected wallet is not the position owner");
+
+  // Preserve the existing datum owner when writing back (owner never changes).
+  const poolDatum = mConStr0([datumOwnerPkh]);
 
   // Action.Burn — Constr(1, [])
   const burnRedeemer = mConStr1([]);
@@ -137,9 +158,16 @@ export async function buildBurnTx(
     .readOnlyTxInReference(stateUtxo.input.txHash, stateUtxo.input.outputIndex)
 
     // Zero-ADA withdrawal from Pyth verify script — carries the signed price message.
-    .withdrawal(PYTH.WITHDRAW_ADDRESS, "0")
+    // Address and script hash derived dynamically from the Pyth State datum.
+    // Script is referenced by UTxO (no CBOR needed).
+    .withdrawal(withdrawAddress, "0")
     .withdrawalPlutusScriptV3()
-    .withdrawalScript(PYTH.WITHDRAW_SCRIPT_CBOR)
+    .withdrawalTxInReference(
+      withdrawRefUtxo.input.txHash,
+      withdrawRefUtxo.input.outputIndex,
+      String(withdrawRefUtxo.output.scriptRef?.length ? withdrawRefUtxo.output.scriptRef.length / 2 : 0),
+      withdrawScriptHash
+    )
     .withdrawalRedeemerValue(pythRedeemer, "Mesh")
 
     // Collateral + change.
@@ -151,7 +179,7 @@ export async function buildBurnTx(
     )
     .changeAddress(walletAddress)
     .selectUtxosFrom(walletUtxos)
-    .requiredSignerHash(ownerPkh) // Burn requires owner signature (on-chain check)
+    .requiredSignerHash(datumOwnerPkh) // Burn requires owner signature (on-chain check)
     .complete();
 
   const unsignedTx = txBuilder.txHex;

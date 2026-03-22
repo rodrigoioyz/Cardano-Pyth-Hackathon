@@ -71,9 +71,9 @@ export async function buildMintTx(
   // ── 1. Fetch UTxOs ────────────────────────────────────────────────────────
 
   // Pool UTxO — the single UTxO locked at the script address.
+  // May not exist on the very first mint; the validator handles that case on-chain.
   const poolUtxos: UTxO[] = await provider.fetchAddressUTxOs(poolAddress);
-  if (poolUtxos.length === 0) throw new Error("Pool UTxO not found");
-  const poolUtxo = poolUtxos[0];
+  const poolUtxo: UTxO | undefined = poolUtxos[0];
 
   // Pyth State NFT UTxO — reference input carrying the oracle state.
   // The UTxO changes on every oracle update, so we query by address + asset unit.
@@ -112,9 +112,9 @@ export async function buildMintTx(
   const mintAmount = computeMintAmount(adaToDeposit, adaUsdPrice);
   if (mintAmount <= 0n) throw new Error("Mint amount too small");
 
-  const currentPoolLovelace = BigInt(
-    poolUtxo.output.amount.find((a) => a.unit === "lovelace")?.quantity ?? "0"
-  );
+  const currentPoolLovelace = poolUtxo
+    ? BigInt(poolUtxo.output.amount.find((a) => a.unit === "lovelace")?.quantity ?? "0")
+    : 0n;
   const newPoolLovelace = currentPoolLovelace + adaToDeposit;
 
   // ── 3. Build datums and redeemers ─────────────────────────────────────────
@@ -138,19 +138,23 @@ export async function buildMintTx(
 
   const txBuilder = new MeshTxBuilder({ fetcher: provider, submitter: provider });
 
-  await txBuilder
-    // Spend the pool UTxO (spend validator delegates to mint validator).
-    .spendingPlutusScriptV3()
-    .txIn(
-      poolUtxo.input.txHash,
-      poolUtxo.input.outputIndex,
-      poolUtxo.output.amount,
-      poolUtxo.output.address
-    )
-    .txInInlineDatumPresent()
-    .txInRedeemerValue(mintRedeemer, "Mesh")
-    .txInScript(scriptCbor)
+  // On the first-ever mint there is no existing pool UTxO to spend.
+  // On subsequent mints the old pool UTxO must be spent and recreated.
+  if (poolUtxo) {
+    txBuilder
+      .spendingPlutusScriptV3()
+      .txIn(
+        poolUtxo.input.txHash,
+        poolUtxo.input.outputIndex,
+        poolUtxo.output.amount,
+        poolUtxo.output.address
+      )
+      .txInInlineDatumPresent()
+      .txInRedeemerValue(mintRedeemer, "Mesh")
+      .txInScript(scriptCbor);
+  }
 
+  await txBuilder
     // Return pool UTxO with increased ADA + updated datum.
     .txOut(poolAddress, [{ unit: "lovelace", quantity: newPoolLovelace.toString() }])
     .txOutInlineDatumValue(poolDatum, "Mesh")

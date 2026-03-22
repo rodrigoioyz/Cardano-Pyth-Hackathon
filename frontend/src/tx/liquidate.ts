@@ -4,11 +4,13 @@ import {
   applyParamsToScript,
   serializePlutusScript,
   resolvePlutusScriptHash,
+  serializeRewardAddress,
   mConStr0,
   mConStr2,
   type UTxO,
   type BrowserWallet,
 } from "@meshsdk/core";
+import { getPythScriptHash } from "@pythnetwork/pyth-lazer-cardano-js";
 
 import {
   UNPARAMETERISED_SCRIPT_CBOR,
@@ -71,6 +73,17 @@ export async function buildLiquidateTx(
   const pythUtxos: UTxO[] = await provider.fetchAddressUTxOs(PYTH.STATE_ADDRESS, pythStateUnit);
   if (pythUtxos.length === 0) throw new Error("Pyth State NFT UTxO not found");
   const stateUtxo = pythUtxos[0];
+
+  // Read the withdraw script hash dynamically from the Pyth State inline datum.
+  const withdrawScriptHash = getPythScriptHash(stateUtxo as any);
+  const withdrawAddress = serializeRewardAddress(withdrawScriptHash, true, 0);
+
+  // Find the UTxO at the Pyth State address that has the withdraw script published as a reference script.
+  const allPythUtxos: UTxO[] = await provider.fetchAddressUTxOs(PYTH.STATE_ADDRESS);
+  const withdrawRefUtxo = allPythUtxos.find(
+    (u) => u.output.scriptHash === withdrawScriptHash
+  );
+  if (!withdrawRefUtxo) throw new Error("Pyth withdraw reference script UTxO not found");
 
   // Liquidator UTxOs — for collateral; ADA reward goes to liquidator's change address.
   const walletUtxos: UTxO[] = await wallet.getUtxos();
@@ -140,9 +153,16 @@ export async function buildLiquidateTx(
     .readOnlyTxInReference(stateUtxo.input.txHash, stateUtxo.input.outputIndex)
 
     // Zero-ADA withdrawal from Pyth verify script — carries the signed price message.
-    .withdrawal(PYTH.WITHDRAW_ADDRESS, "0")
+    // Address and script hash derived dynamically from the Pyth State datum.
+    // Script is referenced by UTxO (no CBOR needed).
+    .withdrawal(withdrawAddress, "0")
     .withdrawalPlutusScriptV3()
-    .withdrawalScript(PYTH.WITHDRAW_SCRIPT_CBOR)
+    .withdrawalTxInReference(
+      withdrawRefUtxo.input.txHash,
+      withdrawRefUtxo.input.outputIndex,
+      String(withdrawRefUtxo.output.scriptRef?.length ? withdrawRefUtxo.output.scriptRef.length / 2 : 0),
+      withdrawScriptHash
+    )
     .withdrawalRedeemerValue(pythRedeemer, "Mesh")
 
     // Collateral + change (liquidator receives the ADA profit via change).
