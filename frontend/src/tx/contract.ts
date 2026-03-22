@@ -14,7 +14,7 @@ export const UNPARAMETERISED_SCRIPT_CBOR =
 
 export const PARAMS = {
   // Pyth State NFT policy ID on preprod — ask Pyth team or check their docs
-  PYTH_POLICY_ID: "TODO" as string,
+  PYTH_POLICY_ID: "d799d287105dea9377cdf9ea8502a83d2b9eb2d2050a8aea800a21e6" as string,
 
   // ADA/USD feed ID in Pyth Lazer
   ADA_USD_FEED_ID: 16,
