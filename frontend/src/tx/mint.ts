@@ -71,8 +71,8 @@ export async function buildMintTx(
   // ── 1. Fetch UTxOs ────────────────────────────────────────────────────────
 
   // Pool UTxO — the single UTxO locked at the script address.
-  // May not exist on the very first mint; the validator handles that case on-chain.
-  const poolUtxos: UTxO[] = await provider.fetchAddressUTxOs(poolAddress);
+  // May not exist on the very first mint (Blockfrost returns 404 for unused addresses).
+  const poolUtxos: UTxO[] = await provider.fetchAddressUTxOs(poolAddress).catch(() => []);
   const poolUtxo: UTxO | undefined = poolUtxos[0];
 
   // Pyth State NFT UTxO — reference input carrying the oracle state.

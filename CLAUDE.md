@@ -201,8 +201,8 @@ const scriptHash  = resolvePlutusScriptHash(poolAddress); // also the minting po
 ```
 
 Known derived values (preprod):
-- `poolAddress` → `addr_test1wq8lshhawfkay7fc68078h7hg36mgnqpfnn82a7y4g067cs78y0m9`
-- `scriptHash`  → `0ff85efd726dd27938d1dfe3dfd74475b44c014ce67577c4aa1faf62`
+- `poolAddress` → `addr_test1wqkhsggq87fndzsll52yp6rm9aw6jw9hhpaenjzxag0xazq3wlxky`
+- `scriptHash`  → `2d7821003f93368a1ffd1440e87b2f5da938b7b87b99c846ea1e6e88`
 
 ### Known preprod constants (`contract.ts`)
 
