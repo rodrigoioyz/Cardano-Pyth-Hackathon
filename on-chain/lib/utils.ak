@@ -201,3 +201,27 @@ test synth_amount_round_trip() {
   let synth = compute_expected_synth_amount(lovelaces, 70_000_000, -8)
   synth == 700_000
 }
+
+// compute_expected_synth_amount (Burn — valor negativo) -----------------------
+
+// Burn 1 ADA: -1_000_000 lovelaces → -700_000 micro-USD (synth a quemar)
+test synth_amount_burn_1_ada() {
+  compute_expected_synth_amount(-1_000_000, 70_000_000, -8) == -700_000
+}
+
+// Burn 2 ADA: -2_000_000 lovelaces → -1_400_000 micro-USD
+test synth_amount_burn_2_ada() {
+  compute_expected_synth_amount(-2_000_000, 70_000_000, -8) == -1_400_000
+}
+
+// Burn 1.5 ADA: -1_500_000 lovelaces → -1_050_000 micro-USD
+test synth_amount_burn_1_5_ada() {
+  compute_expected_synth_amount(-1_500_000, 70_000_000, -8) == -1_050_000
+}
+
+// Simetría: mint y burn deben ser exactamente opuestos
+test synth_amount_mint_burn_symmetry() {
+  let mint = compute_expected_synth_amount(1_000_000, 70_000_000, -8)
+  let burn = compute_expected_synth_amount(-1_000_000, 70_000_000, -8)
+  mint == -burn
+}
