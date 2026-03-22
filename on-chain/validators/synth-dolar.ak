@@ -10,6 +10,7 @@ use types/u32
 pub type Action {
   Mint
   Burn
+  Liquidate
 }
 
 validator synth_dolar(pyth_policy_id: PolicyId, ada_usd_feed_id: Int) {
@@ -24,16 +25,34 @@ validator synth_dolar(pyth_policy_id: PolicyId, ada_usd_feed_id: Int) {
     let Transaction { mint, .. } = _self
     let minted_amount = get_minted_amount(mint, _policy_id)
 
-    let is_deposit_not_zero: Bool = ada_deposited >= 1
+    when _redeemer is {
+      Mint -> {
+        let is_deposit_not_zero: Bool = ada_deposited >= 1
 
-    let expected_minted_amount =
-      todo @"compute_expected_synth_amount(ada_deposited, raw_price, exponent) — pending lib from partner"
+        let expected_minted_amount =
+          todo @"compute_expected_synth_amount(ada_deposited, raw_price, exponent) — pending lib from partner"
 
-    let is_deposit_correct: Bool = minted_amount == expected_minted_amount
+        let is_deposit_correct: Bool = minted_amount == expected_minted_amount
 
-    and { 
-      is_deposit_correct,
-      is_deposit_not_zero
+        and {
+          is_deposit_not_zero,
+          is_deposit_correct,
+        }
+      }
+
+      Burn -> {
+        let is_withdrawal_not_zero: Bool = ada_deposited <= -1
+
+        let expected_burned_amount =
+          todo @"compute_expected_synth_amount(-ada_deposited, raw_price, exponent) — pending lib from partner"
+
+        let is_burn_correct: Bool = minted_amount == -expected_burned_amount
+
+        and {
+          is_withdrawal_not_zero,
+          is_burn_correct,
+        }
+      }
     }
   }
 
