@@ -40,10 +40,10 @@ The protocol enforces:
 
 ### Burn (Synth USD → ADA)
 
-1. User submits synth tokens to burn
+1. User specifies how much ADA to withdraw from the pool
 2. Validator reads live oracle price
-3. Computes ADA to return: `ada_returned = synth_burned / price`
-4. Checks remaining position health: `health = (remaining_ada × price) / remaining_debt ≥ liquidation_threshold`
+3. Computes synth to burn: `synth_burned = ada_withdrawn × raw_price / 10^abs_exp`
+4. Checks remaining position health: `health = (remaining_ada × raw_price / 10^abs_exp) / remaining_debt ≥ liquidation_threshold`
 5. Verifies the transaction is signed by the position owner
 6. ADA is released from the pool
 
