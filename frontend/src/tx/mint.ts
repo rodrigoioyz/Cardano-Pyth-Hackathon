@@ -4,11 +4,13 @@ import {
   applyParamsToScript,
   serializePlutusScript,
   resolvePlutusScriptHash,
+  serializeRewardAddress,
   deserializeAddress,
   mConStr0,
   type UTxO,
   type BrowserWallet,
 } from "@meshsdk/core";
+import { getPythScriptHash } from "@pythnetwork/pyth-lazer-cardano-js";
 
 import {
   UNPARAMETERISED_SCRIPT_CBOR,
@@ -80,6 +82,23 @@ export async function buildMintTx(
   if (pythUtxos.length === 0) throw new Error("Pyth State NFT UTxO not found");
   const stateUtxo = pythUtxos[0];
 
+  // Read the withdraw script hash dynamically from the Pyth State inline datum.
+  // Mirrors getPythScriptHash() from @pythnetwork/pyth-lazer-cardano-js.
+  // The datum is Constr(0, [governance, trusted_signers, deprecated_scripts, withdraw_script])
+  const withdrawScriptHash = getPythScriptHash(stateUtxo as any);
+  const withdrawAddress = serializeRewardAddress(withdrawScriptHash, true, 0);
+  console.log("[buildMintTx] withdrawScriptHash:", withdrawScriptHash);
+  console.log("[buildMintTx] withdrawAddress:", withdrawAddress);
+
+  // Find the UTxO at the Pyth State address that has the withdraw script
+  // published as a reference script. No CBOR needed — we reference it by UTxO.
+  const allPythUtxos: UTxO[] = await provider.fetchAddressUTxOs(PYTH.STATE_ADDRESS);
+  const withdrawRefUtxo = allPythUtxos.find(
+    (u) => u.output.scriptHash === withdrawScriptHash
+  );
+  if (!withdrawRefUtxo) throw new Error("Pyth withdraw reference script UTxO not found");
+  console.log("[buildMintTx] withdrawRefUtxo:", withdrawRefUtxo.input);
+
   // User UTxOs — for ADA input and collateral.
   const walletUtxos: UTxO[] = await wallet.getUtxos();
   const collateral: UTxO[] = await wallet.getCollateral();
@@ -146,9 +165,16 @@ export async function buildMintTx(
     .readOnlyTxInReference(stateUtxo.input.txHash, stateUtxo.input.outputIndex)
 
     // Zero-ADA withdrawal from Pyth verify script — carries the signed price message.
-    .withdrawal(PYTH.WITHDRAW_ADDRESS, "0")
+    // Address and script hash derived dynamically from the Pyth State datum.
+    // Script is referenced by UTxO (no CBOR needed).
+    .withdrawal(withdrawAddress, "0")
     .withdrawalPlutusScriptV3()
-    .withdrawalScript(PYTH.WITHDRAW_SCRIPT_CBOR)
+    .withdrawalTxInReference(
+      withdrawRefUtxo.input.txHash,
+      withdrawRefUtxo.input.outputIndex,
+      String(withdrawRefUtxo.output.scriptRef?.length ? withdrawRefUtxo.output.scriptRef.length / 2 : 0),
+      withdrawScriptHash
+    )
     .withdrawalRedeemerValue(pythRedeemer, "Mesh")
 
     // Collateral + change.

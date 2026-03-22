@@ -204,23 +204,34 @@ fn get_minted_amount(mint: Value, policy_id: PolicyId) -> Int {
 ///
 /// Positive = ADA entered the pool (Mint).
 /// Negative = ADA left the pool (Burn).
+///
+/// The pool input is optional: on the first-ever Mint there is no existing
+/// pool UTxO, so input_lovelace defaults to 0 and the full output amount
+/// counts as the deposit.
 fn get_ada_delta(
   policy_id: PolicyId,
   inputs: List<transaction.Input>,
   outputs: List<transaction.Output>,
 ) -> Int {
-  expect [pool_input] =
+  let pool_inputs =
     list.filter(
       inputs,
       fn(i) { i.output.address.payment_credential == Script(policy_id) },
     )
+
+  let input_lovelace =
+    when pool_inputs is {
+      [] -> 0
+      [pool_input] -> lovelace_of(pool_input.output.value)
+      _ -> fail @"more than one pool input"
+    }
+
   expect [pool_output] =
     list.filter(
       outputs,
       fn(o) { o.address.payment_credential == Script(policy_id) },
     )
 
-  let input_lovelace = lovelace_of(pool_input.output.value)
   let output_lovelace = lovelace_of(pool_output.value)
 
   output_lovelace - input_lovelace
