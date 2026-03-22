@@ -88,6 +88,92 @@ The Pyth verify script validates the **Ed25519 signature** on each price message
 
 ---
 
+## 📐 Protocol Parameters
+
+These values are set at deployment time and enforced entirely on-chain:
+
+| Parameter | Value | Description |
+|---|---|---|
+| `collateral_ratio` | **150%** | You can mint at most 66% of your ADA's USD value in synth tokens |
+| `liquidation_threshold` | **120%** | Positions below this health ratio can be liquidated by anyone |
+| `ada_usd_feed_id` | **16** | Pyth Lazer feed ID for ADA/USD |
+
+**Example:** Depositing 100 ADA at $0.70/ADA ($70 collateral value) → you can mint up to **$46.67 of synth-USD**. If ADA drops to $0.56, your health ratio hits 120% and the position becomes liquidatable.
+
+---
+
+## 👤 User Flow
+
+### Minting synth-USD
+1. User sends ADA to the protocol pool UTxO
+2. On-chain validator fetches live ADA/USD price from Pyth Lazer
+3. Calculates max synth: `synth = ada × price × (100 / collateral_ratio)`
+4. Minting policy issues exactly that amount of synth tokens to the user's wallet
+
+### Burning synth-USD (withdraw ADA)
+1. User decides how much ADA to withdraw
+2. Validator fetches live price from Pyth Lazer
+3. Calculates synth to burn: `synth_burned = ada_withdrawn × price`
+4. Verifies remaining position stays above 120% health
+5. User signs the transaction — synth is burned, ADA returned
+
+### Liquidation (undercollateralized position)
+1. ADA price drops → a position's health falls below 120%
+2. Any user can call `Liquidate`
+3. Liquidator burns synth tokens, receives the equivalent ADA from the pool
+4. No owner signature required — the health condition is the only gate
+
+---
+
+## 🛡️ Quality Assurance & Reliability
+
+### Edge cases handled on-chain
+- **Zero deposit/withdrawal blocked:** `ada_deposited >= 1` and `ada_withdrawn >= 1` enforced explicitly
+- **Zero debt guard:** `health_ratio` fails immediately if `debt_amount == 0` — prevents division by zero
+- **Double Option price unwrap:** Pyth feed returns `Option<Option<Int>>` — the validator explicitly handles `None` (field missing) and `Some(None)` (price unavailable), failing both cases
+- **Single update enforced:** `expect [update] = updates` — rejects transactions with zero or multiple price messages
+
+### Oracle failure handling
+- If the Pyth withdraw script is not included in the transaction, `pyth.get_updates` returns an empty list and the validator fails — **no stale or missing price is ever accepted**
+- The Ed25519 signature on each price message is verified by the Pyth verify script before our validator runs — invalid or replayed messages are rejected at the protocol level
+
+### Price anomaly protection
+- Price is read fresh from the oracle in every transaction — there is no cached or stored price in the datum
+- The `collateral_ratio` and `liquidation_threshold` parameters provide a safety buffer against sudden price moves
+
+---
+
+## 💼 Business Development & Viability
+
+### Target users
+- ADA holders who want USD-denominated liquidity without selling their ADA
+- DeFi users on Cardano seeking synthetic exposure to USD
+- Protocols that need a decentralized, oracle-backed stablecoin primitive
+
+### Market need
+Cardano has existing decentralized stablecoins (DJED by COTI, iUSD by Indigo Protocol). Synth Peso **expands the offering** with a lightweight, single-collateral design that uses Pyth Lazer — a battle-tested, high-frequency oracle — rather than a custom price mechanism. This brings institutional-grade price feeds to Cardano CDP protocols.
+
+### Competitive positioning
+
+| Protocol | Oracle | Collateral | Chain |
+|---|---|---|---|
+| DJED (COTI) | Custom | ADA | Cardano |
+| iUSD (Indigo) | Chainlink | ADA | Cardano |
+| MakerDAO (DAI) | Chainlink | ETH/multi | Ethereum |
+| **Synth Peso** | **Pyth Lazer** | **ADA** | **Cardano** |
+
+Pyth Lazer offers sub-second price updates and is already used across 50+ chains — giving Synth Peso a credibility advantage at launch.
+
+### Revenue model
+Protocol fees collected on mint and liquidation events (configurable via protocol parameters). Fee revenue funds ongoing development and can be directed to a DAO treasury as the protocol matures.
+
+### Scalability
+- **No UTxO contention:** The Pyth State NFT is a reference input — any number of users can mint or burn in the same block without competing for the same UTxO
+- **Permissionless liquidation:** Anyone can liquidate, eliminating the need for a centralized keeper network
+- **Pyth partnership potential:** As Pyth expands its Cardano presence, Synth Peso is positioned to add new synthetic assets (BTC/USD, ETH/USD) by simply deploying new validator instances with different feed IDs
+
+---
+
 ## 🛠️ How to Build
 
 ### Prerequisites
