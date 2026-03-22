@@ -2,7 +2,8 @@ Pyth Examples Contribution
 Team Name: Los Magnificos 
 Submission Name: Example Project
 Team Members: Agustin @AgustinBadi / Mauricio @lordkhyron / Rodrigo @rodrigoioyz
-Contact: ryan@example.org
+Contact: librenotgratis@tuta.io
+
 
 Type of Contribution
  New Example Project (Adding a new example to demonstrate Pyth integration)
