@@ -71,6 +71,13 @@ export async function buildMintTx(
   if (poolUtxos.length === 0) throw new Error("Pool UTxO not found");
   const poolUtxo = poolUtxos[0];
 
+  // Pyth State NFT UTxO — reference input carrying the oracle state.
+  // The UTxO changes on every oracle update, so we query by address + asset name.
+  const pythStateUnit = PARAMS.PYTH_POLICY_ID + PYTH.STATE_ASSET_NAME;
+  const pythUtxos: UTxO[] = await provider.fetchAddressUtxos(PYTH.STATE_ADDRESS, pythStateUnit);
+  if (pythUtxos.length === 0) throw new Error("Pyth State NFT UTxO not found");
+  const stateUtxo = pythUtxos[0];
+
   // User UTxOs — for ADA input and collateral.
   const walletUtxos: UTxO[] = await wallet.getUtxos();
   const collateral: UTxO[] = await wallet.getCollateral();
@@ -133,7 +140,7 @@ export async function buildMintTx(
     .mintRedeemerValue(mintRedeemer, "Mesh")
 
     // Pyth State NFT as reference input (never spent).
-    .readOnlyTxInReference(PYTH.STATE_UTXO_HASH, PYTH.STATE_UTXO_INDEX)
+    .readOnlyTxInReference(stateUtxo.input.txHash, stateUtxo.input.outputIndex)
 
     // Zero-ADA withdrawal from Pyth verify script — carries the signed price message.
     .withdrawal(PYTH.WITHDRAW_ADDRESS, "0")

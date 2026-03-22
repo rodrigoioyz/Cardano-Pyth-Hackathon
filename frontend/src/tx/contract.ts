@@ -29,9 +29,12 @@ export const PARAMS = {
 // ── Pyth on-chain infrastructure (preprod) ────────────────────────────────────
 
 export const PYTH = {
-  // UTxO carrying the Pyth State NFT (reference input, never spent)
-  STATE_UTXO_HASH: "TODO" as string,
-  STATE_UTXO_INDEX: 0,
+  // Address where the Pyth State NFT lives (constant — the NFT always returns here).
+  // Query this at runtime to find the current UTxO holding the NFT.
+  STATE_ADDRESS: "TODO" as string,
+
+  // Asset unit = policy_id + hex("Pyth State") used to identify the NFT in the UTxO.
+  STATE_ASSET_NAME: "50797468205374617465", // "Pyth State" in hex
 
   // The Pyth withdraw script verifies the Ed25519 price signature.
   // Its reward address is used for the zero-ADA withdrawal.
