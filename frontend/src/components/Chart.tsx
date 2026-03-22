@@ -1,7 +1,7 @@
 import { createChart, LineSeries, CandlestickSeries } from "lightweight-charts";
 import type { IChartApi, ISeriesApi, Time } from "lightweight-charts";
 import { useEffect, useRef, useState } from "react";
-import { subscribeWithHistory, getPriceHistory } from "../services/pythMock";
+import { subscribeWithHistory, getPriceHistory } from "../services/pythService";
 
 type ChartType = "line" | "candle";
 

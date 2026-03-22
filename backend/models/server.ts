@@ -28,15 +28,7 @@ class Server{
     }
 
     middlewares(){
-        const limiter = rateLimit({
-            windowMs: 15 * 60 * 1000,
-            max: 100,
-            message: '🚫 Demasiadas peticiones desde esta IP. Intenta más tarde.',
-            standardHeaders: true,
-            legacyHeaders: false,
-        });
-
-        this.app.use(limiter);     
+       
         this.app.use(cors());
         this.app.use(express.json({ limit: '25mb' }));
         this.app.use(express.urlencoded({ extended: true, limit: '25mb' }));

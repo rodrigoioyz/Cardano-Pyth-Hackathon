@@ -1,7 +1,7 @@
 import Wallet from "../components/Wallet";
 import Chart from "../components/Chart";
 import NFTCard from "../components/NFTCard";
-import { subscribe, getPrice } from "../services/pythMock";
+import { subscribe, getPrice } from "../services/pythService";
 import { useState, useEffect } from "react";
 
 const ff =
@@ -225,7 +225,7 @@ export default function Dashboard() {
                 Price History
               </h2>
               <p style={{ fontSize: 12, color: "#98989d", marginTop: 3 }}>
-                ADA / USD · Live simulation
+                ADA / USD · Live
               </p>
             </div>
 
