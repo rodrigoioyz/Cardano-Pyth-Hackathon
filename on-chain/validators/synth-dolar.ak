@@ -1,7 +1,7 @@
 use aiken/collection/dict
 use aiken/collection/list
 use cardano/address.{Script}
-use cardano/assets.{PolicyId, lovelace_of, tokens}
+use cardano/assets.{PolicyId, Value, lovelace_of, tokens}
 use cardano/transaction.{Transaction, OutputReference}
 use pyth
 use pyth.{PriceUpdate}
@@ -19,12 +19,22 @@ validator synth_dolar(pyth_policy_id: PolicyId, ada_usd_feed_id: Int) {
 
     let Transaction { inputs, outputs, .. } = _self
 
-    let ada_deposited = get_ada_delta(_policy_id, _redeemer, inputs, outputs)
+    let ada_deposited = get_ada_delta(_policy_id, inputs, outputs)
 
     let Transaction { mint, .. } = _self
     let minted_amount = get_minted_amount(mint, _policy_id)
 
-    todo @"mint logic goes here"
+    let is_deposit_not_zero: Bool = ada_deposited >= 1
+
+    let expected_minted_amount =
+      todo @"compute_expected_synth_amount(ada_deposited, raw_price, exponent) — pending lib from partner"
+
+    let is_deposit_correct: Bool = minted_amount == expected_minted_amount
+
+    and { 
+      is_deposit_correct,
+      is_deposit_not_zero
+    }
   }
 
   spend(_datum: Option<Data>, _redeemer: Action, _utxo: OutputReference, _self: Transaction) {
@@ -80,31 +90,29 @@ fn get_ada_usd_price(
 
 /// Returns the total quantity of tokens minted or burned under a given policy.
 /// Positive = minting, negative = burning.
-fn get_minted_amount(mint: assets.Value, policy_id: PolicyId) -> Int {
+fn get_minted_amount(mint: Value, policy_id: PolicyId) -> Int {
   tokens(mint, policy_id)
     |> dict.values()
     |> list.foldl(0, fn(qty, acc) { acc + qty })
 }
 
 /// Finds the pool input and output UTxOs at the script address and returns
-/// the absolute ADA delta between them.
+/// the raw ADA delta (output - input).
 ///
-/// The caller uses the `Action` redeemer to interpret the direction:
-///   Mint → delta is ADA deposited  (output > input)
-///   Burn → delta is ADA withdrawn  (input > output)
+/// Positive = ADA entered the pool (Mint).
+/// Negative = ADA left the pool (Burn).
 fn get_ada_delta(
   policy_id: PolicyId,
-  action: Action,
   inputs: List<transaction.Input>,
   outputs: List<transaction.Output>,
 ) -> Int {
-  expect Some(pool_input) =
-    list.find(
+  expect [pool_input] =
+    list.filter(
       inputs,
       fn(i) { i.output.address.payment_credential == Script(policy_id) },
     )
-  expect Some(pool_output) =
-    list.find(
+  expect [pool_output] =
+    list.filter(
       outputs,
       fn(o) { o.address.payment_credential == Script(policy_id) },
     )
@@ -112,8 +120,5 @@ fn get_ada_delta(
   let input_lovelace = lovelace_of(pool_input.output.value)
   let output_lovelace = lovelace_of(pool_output.value)
 
-  when action is {
-    Mint -> output_lovelace - input_lovelace
-    Burn -> input_lovelace - output_lovelace
-  }
+  output_lovelace - input_lovelace
 }
