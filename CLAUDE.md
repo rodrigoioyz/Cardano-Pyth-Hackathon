@@ -43,6 +43,30 @@ let updates: List<PriceUpdate> = pyth.get_updates(pyth_policy_id, transaction)
 - A **Pyth State NFT** reference input (PolicyId passed as parameter, token name `"Pyth State"`)
 - Price messages submitted via the **withdraw script redeemer** as `List<ByteArray>` (handled by the oracle relayer, not our contract)
 
+`get_updates` reads the Pyth redeemer internally via:
+```aiken
+pairs.get_first(tx.redeemers, Withdraw(Script(withdraw_script_hash)))
+```
+The redeemer form is `List<ByteArray>` — each `ByteArray` is a signed Pyth price message. The withdraw script verifies the Ed25519 signature on each message; by the time our validator runs, the price is already authenticated.
+
+Each `ByteArray` message has the following binary structure (Solana wire format):
+```
+[4 bytes]  magic: b9011a82 (little-endian)
+[64 bytes] Ed25519 signature
+[32 bytes] public key
+[2 bytes]  payload length (little-endian u16)
+[N bytes]  payload
+```
+
+The payload itself is structured as:
+```
+[4 bytes]  magic: 75d3c793 (little-endian)
+[8 bytes]  timestamp_us (little-endian u64)
+[1 byte]   channel_id
+[1 byte]   number of feeds
+[...]      feeds (each: 4-byte feed_id + 1-byte property count + properties)
+```
+
 Each `Feed` contains:
 - `feed_id: U32` — asset identifier (e.g., ADA/USD has a specific ID)
 - `price: Option<Option<Int>>` — raw integer price (`Some(None)` = unavailable, `Some(Some(p))` = valid)
