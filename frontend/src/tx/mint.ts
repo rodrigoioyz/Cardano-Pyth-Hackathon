@@ -30,6 +30,7 @@ function getScript() {
     PARAMS.LIQUIDATION_THRESHOLD,
   ]);
 
+  console.log("[getScript] scriptCbor:", scriptCbor);
   const script = { code: scriptCbor, version: "V3" as const };
 
   // Bech32 script address on preprod (network id = 0).
