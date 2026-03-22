@@ -163,3 +163,109 @@ synth_micro = ada_lovelaces × raw_price / 10^8
 
 ### Plutus version
 Plutus v3 — use `ScriptContext` patterns accordingly.
+
+## Frontend (TypeScript / MeshSDK)
+
+Located in `frontend/src/tx/`. Uses MeshSDK v1.9.0-beta + Blockfrost as provider (preprod).
+
+### Key files
+
+| File | Purpose |
+|---|---|
+| `contract.ts` | All shared constants: script CBOR, protocol params, Pyth addresses, amount helpers |
+| `mint.ts` | `buildMintTx` — deposit ADA, mint synth tokens |
+| `burn.ts` | `buildBurnTx` — burn synth tokens, reclaim ADA |
+| `liquidate.ts` | `buildLiquidateTx` — permissionless liquidation of undercollateralised positions |
+
+### Important: script CBOR encoding
+
+Aiken's `plutus.json` outputs `compiledCode` in **single-CBOR** encoding. MeshSDK's `applyParamsToScript` requires **double-CBOR** encoding. Always wrap with `applyCborEncoding` before passing to `applyParamsToScript`:
+
+```typescript
+const UNPARAMETERISED_SCRIPT_CBOR = applyCborEncoding(RAW_COMPILED_CODE);
+```
+
+This is already done in `contract.ts` — do not remove it.
+
+### Script address derivation
+
+```typescript
+const scriptCbor = applyParamsToScript(UNPARAMETERISED_SCRIPT_CBOR, [
+  PARAMS.PYTH_POLICY_ID,
+  PARAMS.ADA_USD_FEED_ID,
+  PARAMS.COLLATERAL_RATIO,
+  PARAMS.LIQUIDATION_THRESHOLD,
+]);
+const poolAddress = serializePlutusScript({ code: scriptCbor, version: "V3" }, undefined, 0).address;
+const scriptHash  = resolvePlutusScriptHash(poolAddress); // also the minting policy ID
+```
+
+Known derived values (preprod):
+- `poolAddress` → `addr_test1wq8lshhawfkay7fc68078h7hg36mgnqpfnn82a7y4g067cs78y0m9`
+- `scriptHash`  → `0ff85efd726dd27938d1dfe3dfd74475b44c014ce67577c4aa1faf62`
+
+### Known preprod constants (`contract.ts`)
+
+```typescript
+PARAMS.PYTH_POLICY_ID  = "d799d287105dea9377cdf9ea8502a83d2b9eb2d2050a8aea800a21e6"
+PARAMS.ADA_USD_FEED_ID = 16
+PARAMS.COLLATERAL_RATIO        = 150
+PARAMS.LIQUIDATION_THRESHOLD   = 120
+
+PYTH.STATE_ADDRESS    = "addr_test1wrm3tr5zpw9k2nefjtsz66wfzn6flnphr5kd6ak9ufrl3wcqqfyn8"
+PYTH.STATE_ASSET_NAME = "50797468205374617465"  // hex("Pyth State")
+// Asset fingerprint: asset1kjr4k3m0xe5c747n6yv2s9dlfhkmzgceqs82jy (verified via CIP-14)
+
+PYTH.WITHDRAW_SCRIPT_CBOR = "TODO"  // Pyth verify script — get from Pyth team
+PYTH.WITHDRAW_ADDRESS     = "TODO"  // reward address of the verify script
+```
+
+### Mesh "Data" format for redeemers/datums
+
+In MeshSDK's "Mesh" encoding (used with `"Mesh"` flag on builder calls):
+- `ByteArray` → plain hex string
+- `List<T>` → JS array `[...]`
+- `Constr(N, fields)` → `mConStr0([...])` / `mConStr1([...])` / `mConStr2([...])` from `@meshsdk/core`
+
+Do **not** use `mBytes` or `mList` — they are not exported by `@meshsdk/core`. Use hex strings and arrays directly.
+
+### Redeemer mapping
+
+| Action | Spend redeemer | Mint redeemer |
+|---|---|---|
+| Mint | `mConStr0([])` | `mConStr0([])` |
+| Burn | `mConStr1([])` | `mConStr1([])` |
+| Liquidate | `mConStr2([])` | `mConStr2([])` |
+
+Pyth withdrawal redeemer: `[pythHex]` — a JS array containing the hex-encoded Solana wire format price message returned by the backend as `solanaPayload`.
+
+### Pyth price message (`pythHex` / `solanaPayload`)
+
+The backend (`/price` endpoint) returns `solanaPayload` — a hex string of the Solana wire format signed price message:
+
+```
+[4 bytes]  magic:          b9 01 1a 82
+[64 bytes] Ed25519 signature
+[32 bytes] public key
+[2 bytes]  payload length (u16 LE)
+[4 bytes]  payload magic:  75 d3 c7 93
+[8 bytes]  timestamp_us (u64 LE)
+[1 byte]   channel_id
+[1 byte]   feed count
+[4 bytes]  feed_id = 16 (ADA/USD, u32 LE)
+[...]      properties: Price (i64 LE), Exponent (i16 LE), ...
+```
+
+This is passed as the withdrawal redeemer to the Pyth verify script, which validates the Ed25519 signature before our validator runs.
+
+### Amount helpers
+
+```typescript
+// Synth to mint for a given ADA deposit
+computeMintAmount(lovelaces, price) = (lovelaces × rawPrice / 1e8) × 100 / collateralRatio
+
+// ADA to return when burning synth
+computeBurnReturn(synthMicro, price) = synthMicro × 1e8 / rawPrice
+```
+
+Where `rawPrice = Math.round(price * 1e8)` (price is the float ADA/USD value).

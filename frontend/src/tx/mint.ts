@@ -35,9 +35,11 @@ function getScript() {
 
   // Bech32 script address on preprod (network id = 0).
   const poolAddress = serializePlutusScript(script, undefined, 0).address;
+  console.log("[getScript] poolAddress:", poolAddress);
 
   // The policy ID is the Blake2b-224 hash of the parameterised script.
   const scriptHash = resolvePlutusScriptHash(poolAddress);
+  console.log("[getScript] scriptHash (policyId):", scriptHash);
 
   return { scriptCbor, scriptHash, poolAddress };
 }

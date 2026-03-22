@@ -35,15 +35,16 @@ export const PARAMS = {
 export const PYTH = {
   // Address where the Pyth State NFT lives (constant — the NFT always returns here).
   // Query this at runtime to find the current UTxO holding the NFT.
-  STATE_ADDRESS: "TODO" as string,
+  STATE_ADDRESS: "addr_test1wrm3tr5zpw9k2nefjtsz66wfzn6flnphr5kd6ak9ufrl3wcqqfyn8",
 
   // Asset unit = policy_id + hex("Pyth State") used to identify the NFT in the UTxO.
   STATE_ASSET_NAME: "50797468205374617465", // "Pyth State" in hex
 
   // The Pyth withdraw script verifies the Ed25519 price signature.
-  // Its reward address is used for the zero-ADA withdrawal.
-  WITHDRAW_SCRIPT_CBOR: "TODO" as string,
-  WITHDRAW_ADDRESS: "TODO" as string, // bech32 reward address on preprod
+  // Script hash read from Pyth State UTxO inline datum (last field of Constr 0).
+  WITHDRAW_SCRIPT_HASH: "68a8972304546f254cbf625996c3a9e2ac860f77a9fcd4ee9f73907b",
+  WITHDRAW_ADDRESS: "stake_test17p5239erq32x7f2vha39n9kr4832eps0w75le48wnaeeq7c4w59zg",
+  WITHDRAW_SCRIPT_CBOR: "TODO" as string, // CBOR needed — check if deployed as reference script
 };
 
 // ── Amount helpers ────────────────────────────────────────────────────────────
