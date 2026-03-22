@@ -179,32 +179,37 @@ Protocol fees collected on mint and liquidation events (configurable via protoco
 ### Prerequisites
 
 - [Aiken](https://aiken-lang.org) v1.1.19
+- Node.js v18+
 
 ```bash
 aikup install v1.1.19
 ```
 
-### Build
+### On-chain contracts
 
 ```bash
 cd on-chain
-aiken build
+aiken build        # compiles → plutus.json
+aiken check        # runs all 25 unit tests
 ```
 
-This compiles the contracts and generates `on-chain/plutus.json` (the Plutus blueprint).
-
-### Run tests
+### Frontend
 
 ```bash
-cd on-chain
-aiken check
+cd frontend
+npm install
+npm run dev
 ```
 
-All 25 unit tests in `lib/utils.ak` cover:
-- `health_ratio` — collateral/debt ratio calculation
-- `can_adjust` / `is_liquidatable` — position health gates
-- `liquidator_payout` / `protocol_payout` — ADA distribution on liquidation
-- `compute_expected_synth_amount` — ADA → synth USD conversion (mint and burn directions)
+Opens at `http://localhost:5173`
+
+### Backend
+
+```bash
+cd backend
+npm install
+npm run dev
+```
 
 ### Project structure
 
@@ -217,6 +222,8 @@ on-chain/
     types/
       cdp.ak           # CdpDatum type
   aiken.toml           # Dependencies
+frontend/              # Vite + React UI
+backend/               # TypeScript API server
 ```
 
 ---
