@@ -14,7 +14,7 @@ const PYTH_URLS = [
 const pythRequestBody = {
   symbols: ["Crypto.ADA/USD"],
   properties: ["price", "confidence", "exponent", "publisherCount"],
-  formats: ["leEcdsa"],
+  formats: ["solana"],
   channel: "fixed_rate@200ms",
   parsed: true,
   jsonBinaryEncoding: "hex",
@@ -64,7 +64,7 @@ export const getADAPriceFromPyth = async (req: Request, res: Response) => {
       confidence,
       publishers: feed.publisherCount,
       timestamp,
-      leEcdsaPayload: data.leEcdsa?.data ?? null,
+      solanaPayload: data.solana?.data ?? null,
     });
 
   } catch (error: any) {
@@ -115,7 +115,7 @@ export const getADAPriceRangeFromPyth = async (req: Request, res: Response) => {
           fetchWithFallback("/price", {
             symbols: ["Crypto.ADA/USD"],
             properties: ["price", "confidence", "exponent"],
-            formats: ["leEcdsa"],
+            formats: ["solana"],
             channel: "fixed_rate@200ms",
             parsed: true,
             jsonBinaryEncoding: "hex",
@@ -174,7 +174,7 @@ export const getADAPriceHistoryFromPyth = async (req: Request, res: Response) =>
     const data = await fetchWithFallback("/price", {
       symbols: ["Crypto.ADA/USD"],
       properties: ["price", "confidence", "exponent", "publisherCount"],
-      formats: ["leEcdsa"],
+      formats: ["solana"],
       channel: "fixed_rate@200ms",
       parsed: true,
       jsonBinaryEncoding: "hex",
@@ -193,7 +193,7 @@ export const getADAPriceHistoryFromPyth = async (req: Request, res: Response) =>
       publishers: feed.publisherCount,
       timestamp_requested: new Date(Number(timestamp) * 1000).toISOString(),
       timestamp_actual: timestamp_iso,
-      leEcdsaPayload: data.leEcdsa?.data ?? null,
+      solanaPayload: data.solana?.data ?? null,
     });
 
   } catch (error: any) {

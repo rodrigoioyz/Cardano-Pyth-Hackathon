@@ -49,7 +49,7 @@ function getScript() {
  *
  * @param wallet         Connected CIP-30 browser wallet (MeshSDK BrowserWallet)
  * @param adaToDeposit   ADA amount the user wants to deposit (in lovelaces)
- * @param pythHex        Signed Pyth price message (leEcdsaPayload from backend)
+ * @param pythHex        Signed Pyth price message (solanaPayload from backend)
  * @param adaUsdPrice    Current ADA/USD price as a float (e.g. 0.70)
  * @param blockfrostKey  Blockfrost preprod project ID
  * @returns              Submitted transaction hash
@@ -99,9 +99,8 @@ export async function buildMintTx(
   const mintRedeemer = mConStr0([]);
 
   // Pyth withdraw redeemer — List<ByteArray> with the signed price message.
-  // NOTE: the on-chain Pyth library expects the Solana wire format (magic b9011a82).
-  //       The backend currently returns leEcdsaPayload — swap to solana format
-  //       once the backend requests formats: ["solana"].
+  // The backend now returns solanaPayload (Solana wire format, magic b9011a82),
+  // which is what the on-chain Pyth library expects.
   const pythRedeemer = mList([mBytes(pythHex)]);
 
   const col = collateral[0];
