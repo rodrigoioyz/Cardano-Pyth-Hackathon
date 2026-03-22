@@ -10,7 +10,6 @@ use types/u32
 pub type Action {
   Mint
   Burn
-  Liquidate
 }
 
 validator synth_dolar(pyth_policy_id: PolicyId, ada_usd_feed_id: Int) {
