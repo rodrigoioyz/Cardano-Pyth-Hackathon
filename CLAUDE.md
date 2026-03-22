@@ -97,9 +97,69 @@ The **Pyth State NFT** is a **reference input** (not spent) — the oracle relay
 
 ### Validator structure
 
-`validators/placeholder.ak` is the entry point to replace. Target structure:
-- `mint` handler — oracle price lookup, synth amount calculation, allow mint/burn
-- `spend` handler — pool UTxO continuity check, ADA balance update
+`validators/synth-dolar.ak` — multi-validator with four compile-time parameters:
+
+```aiken
+validator synth_dolar(
+  pyth_policy_id: PolicyId,     -- Pyth State NFT policy (testnet/mainnet differ)
+  ada_usd_feed_id: Int,         -- 16 (ADA/USD on Pyth Lazer)
+  collateral_ratio: Int,        -- e.g. 150 = 150% collateral requirement
+  liquidation_threshold: Int,   -- e.g. 120 = liquidate when health drops below 120%
+)
+```
+
+#### Types
+
+```aiken
+pub type PoolDatum {
+  owner: ByteArray   -- pubkey hash of the position owner
+}
+
+pub type Action { Mint | Burn | Liquidate }
+```
+
+#### `mint` handler — controls synth token supply
+
+**Mint:**
+1. ADA delta (pool output − pool input) must be ≥ 1 lovelace
+2. Collateralized ADA = `ada_deposited × collateral_ratio / 100`
+3. `minted_amount == compute_expected_synth_amount(collateralized_ada, raw_price, exponent)`
+
+**Burn:**
+1. ADA withdrawal must be ≥ 1 lovelace
+2. `minted_amount == -compute_expected_synth_amount(ada_withdrawn, raw_price, exponent)`
+3. Health after withdrawal ≥ `liquidation_threshold` (position must stay solvent)
+4. Transaction must be signed by `PoolDatum.owner`
+
+**Liquidate:**
+1. ADA withdrawal must be ≥ 1 lovelace
+2. Same burn math as Burn
+3. Health after withdrawal < `liquidation_threshold` (position must be unhealthy)
+4. No owner signature required — anyone can liquidate
+
+#### `spend` handler — guards pool UTxO
+
+Delegates all validation to the `mint` policy. Only checks that the mint policy is running in the same transaction (`get_minted_amount(mint, policy_id) != 0`). The `policy_id` is derived from the spent UTxO's script address.
+
+#### `else` handler
+
+`fail` — rejects all other script purposes (staking, governance, etc.)
+
+#### Helper functions (below validator)
+
+| Function | Purpose |
+|---|---|
+| `get_ada_usd_price` | Fetches `(raw_price, exponent)` from Pyth Lazer via `get_updates` |
+| `get_ada_delta` | Returns `output_lovelace - input_lovelace` for the pool UTxO |
+| `get_pool_ada` | Returns current lovelace balance of the pool input UTxO |
+| `get_minted_amount` | Sums all token quantities minted/burned under a policy |
+
+#### Price formula
+
+```
+synth_micro = ada_lovelaces × raw_price / 10^8
+```
+(ADA/USD exponent = −8; synth tokens have 6 decimals like ADA lovelaces)
 
 ### Plutus version
 Plutus v3 — use `ScriptContext` patterns accordingly.
