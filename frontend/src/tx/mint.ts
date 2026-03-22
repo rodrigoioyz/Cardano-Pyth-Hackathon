@@ -4,14 +4,11 @@ import {
   applyParamsToScript,
   serializePlutusScript,
   resolvePlutusScriptHash,
-  serializeRewardAddress,
   deserializeAddress,
   mConStr0,
   type UTxO,
   type BrowserWallet,
 } from "@meshsdk/core";
-import { getPythScriptHash } from "@pythnetwork/pyth-lazer-cardano-js";
-
 import {
   UNPARAMETERISED_SCRIPT_CBOR,
   PARAMS,
@@ -67,6 +64,7 @@ export async function buildMintTx(
 ): Promise<string> {
   const provider = new BlockfrostProvider(blockfrostKey);
   const { scriptCbor, scriptHash, poolAddress } = getScript();
+  console.log("api key de blockfrost mint.ts",blockfrostKey);
 
   // ── 1. Fetch UTxOs ────────────────────────────────────────────────────────
 
@@ -79,14 +77,15 @@ export async function buildMintTx(
   // The UTxO changes on every oracle update, so we query by address + asset unit.
   const pythStateUnit = PARAMS.PYTH_POLICY_ID + PYTH.STATE_ASSET_NAME;
   const pythUtxos: UTxO[] = await provider.fetchAddressUTxOs(PYTH.STATE_ADDRESS, pythStateUnit);
+    console.log("address de pyth",PYTH.STATE_ADDRESS);
   if (pythUtxos.length === 0) throw new Error("Pyth State NFT UTxO not found");
+  console.log("utxos de pyth",pythUtxos);
   const stateUtxo = pythUtxos[0];
 
-  // Read the withdraw script hash dynamically from the Pyth State inline datum.
-  // Mirrors getPythScriptHash() from @pythnetwork/pyth-lazer-cardano-js.
-  // The datum is Constr(0, [governance, trusted_signers, deprecated_scripts, withdraw_script])
-  const withdrawScriptHash = getPythScriptHash(stateUtxo as any);
-  const withdrawAddress = serializeRewardAddress(withdrawScriptHash, true, 0);
+  // Use hardcoded values from contract.ts — the preprod Pyth State UTxO stores
+  // its datum by hash (not inline), so we can't derive these dynamically.
+  const withdrawScriptHash = PYTH.WITHDRAW_SCRIPT_HASH;
+  const withdrawAddress = PYTH.WITHDRAW_ADDRESS;
   console.log("[buildMintTx] withdrawScriptHash:", withdrawScriptHash);
   console.log("[buildMintTx] withdrawAddress:", withdrawAddress);
 

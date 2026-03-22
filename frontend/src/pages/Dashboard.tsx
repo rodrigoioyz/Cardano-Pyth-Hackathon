@@ -4,14 +4,86 @@ import NFTCard from "../components/NFTCard";
 import { subscribe, getPrice } from "../services/pythService";
 import { useState, useEffect } from "react";
 import { useWallet } from "@meshsdk/react";
+import { buildMintTx } from "../tx/mint";
+import { buildBurnTx } from "../tx/burn";
 
 const ff =
   "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', sans-serif";
 
+const API_URL = import.meta.env.VITE_API_URL as string;
+const BLOCKFROST_KEY = import.meta.env.VITE_BLOCKFROST_KEY as string;
+console.log(BLOCKFROST_KEY);
+
 export default function Dashboard() {
-  const { connected } = useWallet();
+  const { connected, wallet } = useWallet();
   const [price, setPrice] = useState(getPrice());
   const [priceDir, setPriceDir] = useState<"up" | "down" | null>(null);
+
+  // Mint modal state
+  const [mintOpen, setMintOpen] = useState(false);
+  const [adaInput, setAdaInput] = useState("");
+  const [mintLoading, setMintLoading] = useState(false);
+  const [mintResult, setMintResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  // Burn modal state
+  const [burnOpen, setBurnOpen] = useState(false);
+  const [synthInput, setSynthInput] = useState("");
+  const [burnLoading, setBurnLoading] = useState(false);
+  const [burnResult, setBurnResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  const handleBurn = async () => {
+    const synthFloat = parseFloat(synthInput);
+    if (!synthFloat || synthFloat <= 0) return;
+
+    setBurnLoading(true);
+    setBurnResult(null);
+
+    try {
+      const res = await fetch(`${API_URL}/api/get-adaprice`);
+      const data = await res.json();
+      const pythHex: string = data.solanaPayload;
+      const adaUsdPrice: number = data.price;
+
+      // synthToBurn en micro-USD (6 decimales)
+      const synthMicro = BigInt(Math.round(synthFloat * 1_000_000));
+
+      const txHash = await buildBurnTx(wallet as any, synthMicro, pythHex, adaUsdPrice, BLOCKFROST_KEY);
+
+      setBurnResult({ ok: true, msg: `Tx enviada: ${txHash}` });
+    } catch (e: any) {
+      setBurnResult({ ok: false, msg: e.message ?? "Error desconocido" });
+    } finally {
+      setBurnLoading(false);
+    }
+  };
+
+  const handleMint = async () => {
+    const adaFloat = parseFloat(adaInput);
+    if (!adaFloat || adaFloat <= 0) return;
+
+    setMintLoading(true);
+    setMintResult(null);
+
+    try {
+      // 1. Fetch current price + signed Pyth payload from backend
+      const res = await fetch(`${API_URL}/api/get-adaprice`);
+      const data = await res.json();
+      const pythHex: string = data.solanaPayload;
+      const adaUsdPrice: number = data.price;
+
+      // 2. Convert ADA to lovelaces (bigint)
+      const lovelaces = BigInt(Math.round(adaFloat * 1_000_000));
+
+      // 3. Build, sign and submit the mint tx
+      const txHash = await buildMintTx(wallet as any, lovelaces, pythHex, adaUsdPrice, BLOCKFROST_KEY);
+
+      setMintResult({ ok: true, msg: `Tx enviada: ${txHash}` });
+    } catch (e: any) {
+      setMintResult({ ok: false, msg: e.message ?? "Error desconocido" });
+    } finally {
+      setMintLoading(false);
+    }
+  };
 
   useEffect(() => {
     const unsub = subscribe((newPrice) => {
@@ -201,7 +273,7 @@ export default function Dashboard() {
         {connected && (
           <div style={{ display: "flex", justifyContent: "center", gap: 16, marginBottom: 40 }}>
             <button
-              onClick={() => {}}
+              onClick={() => { setMintOpen(true); setMintResult(null); setAdaInput(""); }}
               style={{
                 background: "linear-gradient(135deg, #0071e3, #30d158)",
                 border: "none",
@@ -228,7 +300,7 @@ export default function Dashboard() {
               Mint
             </button>
             <button
-              onClick={() => {}}
+              onClick={() => { setBurnOpen(true); setBurnResult(null); setSynthInput(""); }}
               style={{
                 background: "rgba(255,69,58,0.15)",
                 border: "1px solid rgba(255,69,58,0.35)",
@@ -327,6 +399,176 @@ export default function Dashboard() {
           <NFTCard entryPrice={0.26} currentPrice={price} amount={100} />
         </section>
       </main>
+
+      {/* Mint Modal */}
+      {mintOpen && (
+        <div
+          onClick={() => !mintLoading && setMintOpen(false)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 9999,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: "rgba(0,0,0,0.6)", backdropFilter: "blur(16px)",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "rgba(28,28,30,0.97)",
+              border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: 20, padding: 28, width: 360,
+              boxShadow: "0 40px 100px rgba(0,0,0,0.8)", fontFamily: ff,
+            }}
+          >
+            <h2 style={{ color: "#f5f5f7", fontSize: 18, fontWeight: 600, marginBottom: 6 }}>
+              Mint Synth-USD
+            </h2>
+            <p style={{ color: "#98989d", fontSize: 13, marginBottom: 20 }}>
+              Ingresa cuánto ADA deseas depositar
+            </p>
+
+            <input
+              type="number"
+              min="1"
+              placeholder="Ej: 10"
+              value={adaInput}
+              onChange={(e) => setAdaInput(e.target.value)}
+              style={{
+                width: "100%", boxSizing: "border-box",
+                background: "rgba(255,255,255,0.06)",
+                border: "1px solid rgba(255,255,255,0.12)",
+                borderRadius: 12, padding: "12px 16px",
+                color: "#f5f5f7", fontSize: 16, fontFamily: ff,
+                outline: "none", marginBottom: 8,
+              }}
+            />
+            <p style={{ color: "#98989d", fontSize: 12, marginBottom: 20 }}>
+              Precio actual: ${price.toFixed(4)} · Recibirás ≈ {adaInput ? (parseFloat(adaInput) * price * 100 / 150).toFixed(4) : "0"} synth-USD
+            </p>
+
+            {mintResult && (
+              <p style={{
+                color: mintResult.ok ? "#30d158" : "#ff453a",
+                fontSize: 13, marginBottom: 16,
+                wordBreak: "break-all",
+              }}>
+                {mintResult.msg}
+              </p>
+            )}
+
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                onClick={() => setMintOpen(false)}
+                disabled={mintLoading}
+                style={{
+                  flex: 1, padding: "12px 0", borderRadius: 12,
+                  background: "rgba(255,255,255,0.07)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  color: "#98989d", fontSize: 15, cursor: "pointer", fontFamily: ff,
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleMint}
+                disabled={mintLoading || !adaInput}
+                style={{
+                  flex: 1, padding: "12px 0", borderRadius: 12,
+                  background: mintLoading ? "rgba(0,113,227,0.5)" : "linear-gradient(135deg, #0071e3, #30d158)",
+                  border: "none", color: "#fff", fontSize: 15,
+                  fontWeight: 600, cursor: mintLoading ? "not-allowed" : "pointer", fontFamily: ff,
+                }}
+              >
+                {mintLoading ? "Procesando..." : "Confirmar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Burn Modal */}
+      {burnOpen && (
+        <div
+          onClick={() => !burnLoading && setBurnOpen(false)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 9999,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: "rgba(0,0,0,0.6)", backdropFilter: "blur(16px)",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "rgba(28,28,30,0.97)",
+              border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: 20, padding: 28, width: 360,
+              boxShadow: "0 40px 100px rgba(0,0,0,0.8)", fontFamily: ff,
+            }}
+          >
+            <h2 style={{ color: "#f5f5f7", fontSize: 18, fontWeight: 600, marginBottom: 6 }}>
+              Burn Synth-USD
+            </h2>
+            <p style={{ color: "#98989d", fontSize: 13, marginBottom: 20 }}>
+              Ingresa cuánto synth-USD deseas quemar
+            </p>
+
+            <input
+              type="number"
+              min="0"
+              placeholder="Ej: 5.00"
+              value={synthInput}
+              onChange={(e) => setSynthInput(e.target.value)}
+              style={{
+                width: "100%", boxSizing: "border-box",
+                background: "rgba(255,255,255,0.06)",
+                border: "1px solid rgba(255,255,255,0.12)",
+                borderRadius: 12, padding: "12px 16px",
+                color: "#f5f5f7", fontSize: 16, fontFamily: ff,
+                outline: "none", marginBottom: 8,
+              }}
+            />
+            <p style={{ color: "#98989d", fontSize: 12, marginBottom: 20 }}>
+              Precio actual: ${price.toFixed(4)} · Recibirás ≈ {synthInput ? (parseFloat(synthInput) / price).toFixed(4) : "0"} ADA
+            </p>
+
+            {burnResult && (
+              <p style={{
+                color: burnResult.ok ? "#30d158" : "#ff453a",
+                fontSize: 13, marginBottom: 16,
+                wordBreak: "break-all",
+              }}>
+                {burnResult.msg}
+              </p>
+            )}
+
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                onClick={() => setBurnOpen(false)}
+                disabled={burnLoading}
+                style={{
+                  flex: 1, padding: "12px 0", borderRadius: 12,
+                  background: "rgba(255,255,255,0.07)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  color: "#98989d", fontSize: 15, cursor: "pointer", fontFamily: ff,
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleBurn}
+                disabled={burnLoading || !synthInput}
+                style={{
+                  flex: 1, padding: "12px 0", borderRadius: 12,
+                  background: burnLoading ? "rgba(255,69,58,0.3)" : "rgba(255,69,58,0.85)",
+                  border: "none", color: "#fff", fontSize: 15,
+                  fontWeight: 600, cursor: burnLoading ? "not-allowed" : "pointer", fontFamily: ff,
+                }}
+              >
+                {burnLoading ? "Procesando..." : "Confirmar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style>{`
         @keyframes pulse {
