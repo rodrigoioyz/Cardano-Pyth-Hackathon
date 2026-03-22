@@ -3,11 +3,13 @@ import Chart from "../components/Chart";
 import NFTCard from "../components/NFTCard";
 import { subscribe, getPrice } from "../services/pythService";
 import { useState, useEffect } from "react";
+import { useWallet } from "@meshsdk/react";
 
 const ff =
   "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', sans-serif";
 
 export default function Dashboard() {
+  const { connected } = useWallet();
   const [price, setPrice] = useState(getPrice());
   const [priceDir, setPriceDir] = useState<"up" | "down" | null>(null);
 
@@ -194,6 +196,66 @@ export default function Dashboard() {
             </span>
           </div>
         </section>
+
+        {/* Mint button — visible only when wallet is connected */}
+        {connected && (
+          <div style={{ display: "flex", justifyContent: "center", gap: 16, marginBottom: 40 }}>
+            <button
+              onClick={() => {}}
+              style={{
+                background: "linear-gradient(135deg, #0071e3, #30d158)",
+                border: "none",
+                borderRadius: 980,
+                color: "#fff",
+                fontSize: 16,
+                fontWeight: 600,
+                padding: "14px 48px",
+                cursor: "pointer",
+                fontFamily: ff,
+                letterSpacing: "-0.2px",
+                boxShadow: "0 4px 24px rgba(0,113,227,0.35)",
+                transition: "transform 0.15s, box-shadow 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = "scale(1.03)";
+                e.currentTarget.style.boxShadow = "0 6px 32px rgba(0,113,227,0.5)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = "scale(1)";
+                e.currentTarget.style.boxShadow = "0 4px 24px rgba(0,113,227,0.35)";
+              }}
+            >
+              Mint
+            </button>
+            <button
+              onClick={() => {}}
+              style={{
+                background: "rgba(255,69,58,0.15)",
+                border: "1px solid rgba(255,69,58,0.35)",
+                borderRadius: 980,
+                color: "#ff453a",
+                fontSize: 16,
+                fontWeight: 600,
+                padding: "14px 48px",
+                cursor: "pointer",
+                fontFamily: ff,
+                letterSpacing: "-0.2px",
+                boxShadow: "0 4px 24px rgba(255,69,58,0.15)",
+                transition: "transform 0.15s, box-shadow 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = "scale(1.03)";
+                e.currentTarget.style.boxShadow = "0 6px 32px rgba(255,69,58,0.3)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = "scale(1)";
+                e.currentTarget.style.boxShadow = "0 4px 24px rgba(255,69,58,0.15)";
+              }}
+            >
+              Burn
+            </button>
+          </div>
+        )}
 
         {/* Chart card */}
         <section
