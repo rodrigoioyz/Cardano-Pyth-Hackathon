@@ -54,6 +54,8 @@ fn get_ada_usd_price(
 
 validator synth_dolar(pyth_policy_id: PolicyId, ada_usd_feed_id: Int) {
   mint(_redeemer: Action, _policy_id: PolicyId, _self: Transaction) {
+    let (raw_price, exponent) =
+      get_ada_usd_price(pyth_policy_id, ada_usd_feed_id, _self)
     todo @"mint logic goes here"
   }
 
