@@ -47,6 +47,22 @@ pub fn protocol_payout(
   fee_amount * pow(10, abs_exp) / raw_price
 }
 
+/// Convierte ADA (lovelaces) a synth tokens (micro-USD).
+/// Dirección forward del oracle: ADA → synth USD.
+///
+/// synth_amount = ada_lovelaces * raw_price / 10^abs_exp
+///
+/// Ejemplo (ADA/USD $0.70, exponent=-8):
+///   1_000_000 lovelaces → 700_000 micro-USD ($0.70)
+pub fn compute_expected_synth_amount(
+  ada_lovelaces: Int,
+  raw_price: Int,
+  exponent: Int,
+) -> Int {
+  let abs_exp = if exponent < 0 { -exponent } else { exponent }
+  ada_lovelaces * raw_price / pow(10, abs_exp)
+}
+
 fn pow(base: Int, exp: Int) -> Int {
   if exp == 0 {
     1
@@ -159,4 +175,29 @@ test protocol_payout_2pct() {
 // 0% fee → 0 lovelaces
 test protocol_payout_zero_fee() {
   protocol_payout(700_000, 0, 70_000_000, -8) == 0
+}
+
+// compute_expected_synth_amount -----------------------------------------------
+
+// 1 ADA ($0.70) → 700_000 micro-USD
+test synth_amount_1_ada() {
+  compute_expected_synth_amount(1_000_000, 70_000_000, -8) == 700_000
+}
+
+// 2 ADA ($1.40) → 1_400_000 micro-USD
+test synth_amount_2_ada() {
+  compute_expected_synth_amount(2_000_000, 70_000_000, -8) == 1_400_000
+}
+
+// 1.5 ADA ($1.05) → 1_050_000 micro-USD
+test synth_amount_1_5_ada() {
+  compute_expected_synth_amount(1_500_000, 70_000_000, -8) == 1_050_000
+}
+
+// inverso: synth→ADA y luego ADA→synth debe recuperar el valor original
+// 700_000 micro-USD → 1_000_000 lovelaces → 700_000 micro-USD
+test synth_amount_round_trip() {
+  let lovelaces = 1_000_000
+  let synth = compute_expected_synth_amount(lovelaces, 70_000_000, -8)
+  synth == 700_000
 }
