@@ -1,11 +1,16 @@
 use aiken/collection/dict
+use utils.{compute_expected_synth_amount, health_ratio}
 use aiken/collection/list
 use cardano/address.{Script}
 use cardano/assets.{PolicyId, Value, lovelace_of, tokens}
-use cardano/transaction.{Transaction, OutputReference}
+use cardano/transaction.{Transaction, OutputReference, InlineDatum}
 use pyth
 use pyth.{PriceUpdate}
 use types/u32
+
+pub type PoolDatum {
+  owner: ByteArray
+}
 
 pub type Action {
   Mint
@@ -13,24 +18,30 @@ pub type Action {
   Liquidate
 }
 
-validator synth_dolar(pyth_policy_id: PolicyId, ada_usd_feed_id: Int) {
-  mint(_redeemer: Action, _policy_id: PolicyId, _self: Transaction) {
+validator synth_dolar(
+  pyth_policy_id: PolicyId,
+  ada_usd_feed_id: Int,
+  collateral_ratio: Int,
+  liquidation_threshold: Int,
+) {
+  mint(redeemer: Action, policy_id: PolicyId, self: Transaction) {
     let (raw_price, exponent) =
-      get_ada_usd_price(pyth_policy_id, ada_usd_feed_id, _self)
+      get_ada_usd_price(pyth_policy_id, ada_usd_feed_id, self)
 
-    let Transaction { inputs, outputs, .. } = _self
+    let Transaction { inputs, outputs, mint, extra_signatories, .. } = self
 
-    let ada_deposited = get_ada_delta(_policy_id, inputs, outputs)
+    let minted_amount = get_minted_amount(mint, policy_id)
 
-    let Transaction { mint, .. } = _self
-    let minted_amount = get_minted_amount(mint, _policy_id)
-
-    when _redeemer is {
+    when redeemer is {
       Mint -> {
+        let ada_deposited = get_ada_delta(policy_id, inputs, outputs)
         let is_deposit_not_zero: Bool = ada_deposited >= 1
 
+        // Collateral requirement: deposited ADA must be worth at least
+        // collateral_ratio% of the synth tokens being minted.
+        let collateralized_ada = ada_deposited * collateral_ratio / 100
         let expected_minted_amount =
-          todo @"compute_expected_synth_amount(ada_deposited, raw_price, exponent) — pending lib from partner"
+          compute_expected_synth_amount(collateralized_ada, raw_price, exponent)
 
         let is_deposit_correct: Bool = minted_amount == expected_minted_amount
 
@@ -41,23 +52,84 @@ validator synth_dolar(pyth_policy_id: PolicyId, ada_usd_feed_id: Int) {
       }
 
       Burn -> {
-        let is_withdrawal_not_zero: Bool = ada_deposited <= -1
+        let ada_delta = get_ada_delta(policy_id, inputs, outputs)
+        let ada_withdrawn = ada_delta * -1
+        let is_withdrawal_not_zero: Bool = ada_withdrawn >= 1
 
         let expected_burned_amount =
-          todo @"compute_expected_synth_amount(-ada_deposited, raw_price, exponent) — pending lib from partner"
+          compute_expected_synth_amount(ada_withdrawn, raw_price, exponent)
 
         let is_burn_correct: Bool = minted_amount == -expected_burned_amount
+
+        // Derive current debt from pool ADA at oracle price, then compute
+        // remaining health after the withdrawal to enforce liquidation threshold.
+        let pool_ada = get_pool_ada(policy_id, inputs)
+        let current_debt = compute_expected_synth_amount(pool_ada, raw_price, exponent)
+        let remaining_debt = current_debt + minted_amount
+        let remaining_ada = pool_ada - ada_withdrawn
+        let health =
+          health_ratio(remaining_ada, remaining_debt, raw_price, exponent)
+        let is_healthy: Bool = health >= liquidation_threshold
+
+        // Only the owner can burn — extract owner from pool input datum.
+        expect [pool_input] =
+          list.filter(
+            inputs,
+            fn(i) { i.output.address.payment_credential == Script(policy_id) },
+          )
+        expect InlineDatum(datum_data) = pool_input.output.datum
+        expect datum: PoolDatum = datum_data
+        let is_owner_signed: Bool =
+          list.has(extra_signatories, datum.owner)
 
         and {
           is_withdrawal_not_zero,
           is_burn_correct,
+          is_healthy,
+          is_owner_signed,
+        }
+      }
+
+      Liquidate -> {
+        let ada_delta = get_ada_delta(policy_id, inputs, outputs)
+        let ada_withdrawn = ada_delta * -1
+        let is_withdrawal_not_zero: Bool = ada_withdrawn >= 1
+
+        let expected_burned_amount =
+          compute_expected_synth_amount(ada_withdrawn, raw_price, exponent)
+
+        let is_burn_correct: Bool = minted_amount == -expected_burned_amount
+
+        // Position must be unhealthy for liquidation to be valid — anyone can liquidate.
+        let pool_ada = get_pool_ada(policy_id, inputs)
+        let current_debt = compute_expected_synth_amount(pool_ada, raw_price, exponent)
+        let remaining_debt = current_debt + minted_amount
+        let remaining_ada = pool_ada - ada_withdrawn
+        let health =
+          health_ratio(remaining_ada, remaining_debt, raw_price, exponent)
+        let is_liquidatable: Bool = health < liquidation_threshold
+
+        and {
+          is_withdrawal_not_zero,
+          is_burn_correct,
+          is_liquidatable,
         }
       }
     }
   }
 
-  spend(_datum: Option<Data>, _redeemer: Action, _utxo: OutputReference, _self: Transaction) {
-    todo @"spend logic goes here"
+  spend(_datum: Option<Data>, _redeemer: Action, utxo: OutputReference, self: Transaction) {
+    // Derive the policy_id from the UTxO being spent — since it's a multi-validator,
+    // the script hash of the spend address equals the mint policy_id.
+    let Transaction { inputs, mint, .. } = self
+    expect Some(own_input) =
+      list.find(inputs, fn(i) { i.output_reference == utxo })
+    expect Script(policy_id) = own_input.output.address.payment_credential
+
+    // Delegate all validation to the mint policy.
+    // The spend validator just ensures the mint policy is running in this tx,
+    // which guarantees price, math, health and owner checks are enforced.
+    get_minted_amount(mint, policy_id) != 0
   }
 
   else(_ctx) {
@@ -65,10 +137,21 @@ validator synth_dolar(pyth_policy_id: PolicyId, ada_usd_feed_id: Int) {
   }
 }
 
+/// Returns the lovelace balance of the pool UTxO at the script address.
+/// Used to derive current debt and health ratio without tracking state in the datum.
+fn get_pool_ada(policy_id: PolicyId, inputs: List<transaction.Input>) -> Int {
+  expect [pool_input] =
+    list.filter(
+      inputs,
+      fn(i) { i.output.address.payment_credential == Script(policy_id) },
+    )
+  lovelace_of(pool_input.output.value)
+}
+
 /// Fetches the ADA/USD raw price and exponent from Pyth Lazer.
 ///
 /// Requires the transaction to include:
-///   - A Pyth State NFT reference input (identified by `pyth_policy_id`)
+///   - A Pyth State NFT reference input (identified by `pythpolicy_id`)
 ///   - A 0-ADA withdrawal from the Pyth verify script carrying the signed
 ///     price message as redeemer — verified by that script, not here.
 ///
@@ -78,13 +161,13 @@ validator synth_dolar(pyth_policy_id: PolicyId, ada_usd_feed_id: Int) {
 /// For ADA/USD (feed_id=16, exponent=-8):
 ///   raw_price = 70_000_000  →  $0.70 per ADA
 fn get_ada_usd_price(
-  pyth_policy_id: PolicyId,
+  pythpolicy_id: PolicyId,
   ada_usd_feed_id: Int,
   tx: Transaction,
 ) -> (Int, Int) {
   // Pull all price updates from the transaction — the Pyth withdraw script
   // has already verified the Ed25519 signature by the time we get here.
-  let updates = pyth.get_updates(pyth_policy_id, tx)
+  let updates = pyth.get_updates(pythpolicy_id, tx)
 
   // We expect exactly one price update message per transaction.
   expect [update] = updates
