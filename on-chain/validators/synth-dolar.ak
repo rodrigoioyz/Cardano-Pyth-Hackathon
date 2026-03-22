@@ -37,11 +37,12 @@ validator synth_dolar(
         let ada_deposited = get_ada_delta(policy_id, inputs, outputs)
         let is_deposit_not_zero: Bool = ada_deposited >= 1
 
-        // Collateral requirement: deposited ADA must be worth at least
-        // collateral_ratio% of the synth tokens being minted.
-        let collateralized_ada = ada_deposited * collateral_ratio / 100
+
+        
+        // Collateral requirement: the user can only mint a fraction of the ADA's
+        // USD value. With collateral_ratio=150, $1.50 of ADA mints $1.00 of synth.
         let expected_minted_amount =
-          compute_expected_synth_amount(collateralized_ada, raw_price, exponent)
+          compute_expected_synth_amount(ada_deposited, raw_price, exponent) * 100 / collateral_ratio
 
         let is_deposit_correct: Bool = minted_amount == expected_minted_amount
 
