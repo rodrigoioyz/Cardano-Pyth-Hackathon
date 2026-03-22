@@ -228,6 +228,120 @@ backend/               # TypeScript API server
 
 ---
 
+## 🔌 Backend API
+
+Base URL: `http://127.0.0.1:3001`
+
+### GET /api/get-adaprice
+Returns the current ADA/USD price from Pyth Lazer.
+
+```
+GET /api/get-adaprice
+```
+
+**Response 200**
+```json
+{
+  "symbol": "ADA/USD",
+  "price": 0.25446211,
+  "confidence": 0.00003405,
+  "publishers": 12,
+  "timestamp": "2026-03-22T14:30:00.000Z",
+  "leEcdsaPayload": "0x1a2b3c..."
+}
+```
+
+---
+
+### GET /api/get-adaprice-history
+Returns the ADA/USD price at a specific past timestamp.
+
+```
+GET /api/get-adaprice-history?timestamp={unix_seconds}
+```
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `timestamp` | number | ✅ | Unix timestamp in seconds |
+
+**Response 200**
+```json
+{
+  "symbol": "ADA/USD",
+  "price": 0.25312000,
+  "confidence": 0.00003100,
+  "publishers": 12,
+  "timestamp_requested": "2026-03-22T10:00:00.000Z",
+  "timestamp_actual": "2026-03-22T10:00:00.200Z",
+  "leEcdsaPayload": "0x1a2b3c..."
+}
+```
+
+| Status | Description |
+|---|---|
+| 400 | Missing `timestamp` parameter |
+| 404 | No data for that timestamp |
+| 429 | Rate limit exceeded |
+| 500 | Internal error |
+
+---
+
+### GET /api/get-adaprice-range
+Returns a price series between two timestamps. Compatible with TradingView Lightweight Charts.
+
+```
+GET /api/get-adaprice-range?from={unix_seconds}&to={unix_seconds}&interval={seconds}
+```
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `from` | number | ✅ | — | Range start (Unix seconds) |
+| `to` | number | ✅ | — | Range end (Unix seconds) |
+| `interval` | number | ❌ | `60` | Seconds between each data point |
+
+> Maximum 500 points per request. If exceeded, returns 400 with suggested interval.
+
+**Recommended intervals**
+
+| Range | Suggested interval | Approx points |
+|---|---|---|
+| 1 hour | `15` (15 sec) | 240 |
+| 2 hours | `300` (5 min) | 24 |
+| 24 hours | `3600` (1 hour) | 24 |
+| 7 days | `86400` (1 day) | 7 |
+
+**Response 200**
+```json
+{
+  "symbol": "ADA/USD",
+  "from": "2026-03-22T10:00:00.000Z",
+  "to": "2026-03-22T12:00:00.000Z",
+  "intervalSec": 300,
+  "points": 24,
+  "data": [
+    { "time": 1742641800, "value": 0.25446211, "confidence": 0.00003405 },
+    { "time": 1742642100, "value": 0.25512000, "confidence": 0.00003100 }
+  ]
+}
+```
+
+> `time` is in Unix seconds — directly compatible with TradingView Lightweight Charts.
+
+| Status | Description |
+|---|---|
+| 400 | Missing `from`/`to`, or 500-point limit exceeded |
+| 500 | Internal error / all Pyth endpoints failed |
+
+---
+
+### API Notes
+- All prices in **USD**
+- `leEcdsaPayload` is the signed binary payload for on-chain verification in Aiken/Cardano contracts
+- Real price = `mantissa × 10^exponent` (already applied in the response)
+- Backend has **automatic fallback** across 3 Pyth endpoints — if one fails, it tries the next
+
+---
+
 ✅ Quality Checklist
 
 - [x] Make it beautiful: Clean hierarchy and formatting.
