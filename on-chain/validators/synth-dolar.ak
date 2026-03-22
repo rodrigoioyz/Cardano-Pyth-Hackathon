@@ -151,7 +151,7 @@ fn get_pool_ada(policy_id: PolicyId, inputs: List<transaction.Input>) -> Int {
 /// Fetches the ADA/USD raw price and exponent from Pyth Lazer.
 ///
 /// Requires the transaction to include:
-///   - A Pyth State NFT reference input (identified by `pythpolicy_id`)
+///   - A Pyth State NFT reference input (identified by `pyth_policy_id`)
 ///   - A 0-ADA withdrawal from the Pyth verify script carrying the signed
 ///     price message as redeemer — verified by that script, not here.
 ///
@@ -161,13 +161,13 @@ fn get_pool_ada(policy_id: PolicyId, inputs: List<transaction.Input>) -> Int {
 /// For ADA/USD (feed_id=16, exponent=-8):
 ///   raw_price = 70_000_000  →  $0.70 per ADA
 fn get_ada_usd_price(
-  pythpolicy_id: PolicyId,
+  pyth_policy_id: PolicyId,
   ada_usd_feed_id: Int,
   tx: Transaction,
 ) -> (Int, Int) {
   // Pull all price updates from the transaction — the Pyth withdraw script
   // has already verified the Ed25519 signature by the time we get here.
-  let updates = pyth.get_updates(pythpolicy_id, tx)
+  let updates = pyth.get_updates(pyth_policy_id, tx)
 
   // We expect exactly one price update message per transaction.
   expect [update] = updates
