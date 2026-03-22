@@ -86,6 +86,13 @@ The Pyth verify script validates the **Ed25519 signature** on each price message
 - **Exponent:** -8 (i.e. `raw_price = 70_000_000` → `$0.70 per ADA`)
 - **No contention:** The Pyth State NFT is a reference input — multiple users can mint/burn in the same block without UTxO conflicts
 
+### Deployment addresses (PreProd testnet)
+
+| Parameter | Value |
+|---|---|
+| `pyth_policy_id` | `d799d287105dea9377cdf9ea8502a83d2b9eb2d2050a8aea800a21e6` |
+| Network | Cardano PreProd |
+
 ---
 
 ## 📐 Protocol Parameters
