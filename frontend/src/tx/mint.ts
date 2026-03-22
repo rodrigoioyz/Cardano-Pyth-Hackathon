@@ -2,11 +2,10 @@ import {
   BlockfrostProvider,
   MeshTxBuilder,
   applyParamsToScript,
-  serializeAddressObj,
+  serializePlutusScript,
+  resolvePlutusScriptHash,
   deserializeAddress,
   mConStr0,
-  mBytes,
-  mList,
   type UTxO,
   type BrowserWallet,
 } from "@meshsdk/core";
@@ -31,13 +30,13 @@ function getScript() {
     PARAMS.LIQUIDATION_THRESHOLD,
   ]);
 
-  // The policy ID is the Blake2b-224 hash of the parameterised script.
-  const { scriptHash } = deserializeAddress(
-    serializeAddressObj({ scriptHash: scriptCbor }, 0) // derive hash only
-  );
+  const script = { code: scriptCbor, version: "V3" as const };
 
   // Bech32 script address on preprod (network id = 0).
-  const poolAddress = serializeAddressObj({ scriptHash }, 0);
+  const poolAddress = serializePlutusScript(script, undefined, 0).address;
+
+  // The policy ID is the Blake2b-224 hash of the parameterised script.
+  const scriptHash = resolvePlutusScriptHash(poolAddress);
 
   return { scriptCbor, scriptHash, poolAddress };
 }
@@ -67,14 +66,14 @@ export async function buildMintTx(
   // ── 1. Fetch UTxOs ────────────────────────────────────────────────────────
 
   // Pool UTxO — the single UTxO locked at the script address.
-  const poolUtxos: UTxO[] = await provider.fetchAddressUtxos(poolAddress);
+  const poolUtxos: UTxO[] = await provider.fetchAddressUTxOs(poolAddress);
   if (poolUtxos.length === 0) throw new Error("Pool UTxO not found");
   const poolUtxo = poolUtxos[0];
 
   // Pyth State NFT UTxO — reference input carrying the oracle state.
-  // The UTxO changes on every oracle update, so we query by address + asset name.
+  // The UTxO changes on every oracle update, so we query by address + asset unit.
   const pythStateUnit = PARAMS.PYTH_POLICY_ID + PYTH.STATE_ASSET_NAME;
-  const pythUtxos: UTxO[] = await provider.fetchAddressUtxos(PYTH.STATE_ADDRESS, pythStateUnit);
+  const pythUtxos: UTxO[] = await provider.fetchAddressUTxOs(PYTH.STATE_ADDRESS, pythStateUnit);
   if (pythUtxos.length === 0) throw new Error("Pyth State NFT UTxO not found");
   const stateUtxo = pythUtxos[0];
 
@@ -99,16 +98,17 @@ export async function buildMintTx(
   // ── 3. Build datums and redeemers ─────────────────────────────────────────
 
   // PoolDatum { owner: ByteArray } — Constr(0, [owner_pkh])
+  // In Mesh "Data" format: ByteArray is a plain hex string, Constr is mConStr0.
   const ownerPkh = deserializeAddress(walletAddress).pubKeyHash;
-  const poolDatum = mConStr0([mBytes(ownerPkh)]);
+  const poolDatum = mConStr0([ownerPkh]);
 
   // Action.Mint — Constr(0, [])
   const mintRedeemer = mConStr0([]);
 
   // Pyth withdraw redeemer — List<ByteArray> with the signed price message.
-  // The backend now returns solanaPayload (Solana wire format, magic b9011a82),
-  // which is what the on-chain Pyth library expects.
-  const pythRedeemer = mList([mBytes(pythHex)]);
+  // In Mesh "Data" format: List is a plain JS array, ByteArray is a hex string.
+  // The backend returns solanaPayload (Solana wire format, magic b9011a82).
+  const pythRedeemer = [pythHex];
 
   const col = collateral[0];
 

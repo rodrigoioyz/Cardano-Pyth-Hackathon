@@ -2,12 +2,11 @@ import {
   BlockfrostProvider,
   MeshTxBuilder,
   applyParamsToScript,
-  serializeAddressObj,
+  serializePlutusScript,
+  resolvePlutusScriptHash,
   deserializeAddress,
   mConStr0,
   mConStr1,
-  mBytes,
-  mList,
   type UTxO,
   type BrowserWallet,
 } from "@meshsdk/core";
@@ -29,11 +28,9 @@ function getScript() {
     PARAMS.LIQUIDATION_THRESHOLD,
   ]);
 
-  const { scriptHash } = deserializeAddress(
-    serializeAddressObj({ scriptHash: scriptCbor }, 0)
-  );
-
-  const poolAddress = serializeAddressObj({ scriptHash }, 0);
+  const script = { code: scriptCbor, version: "V3" as const };
+  const poolAddress = serializePlutusScript(script, undefined, 0).address;
+  const scriptHash = resolvePlutusScriptHash(poolAddress);
 
   return { scriptCbor, scriptHash, poolAddress };
 }
@@ -63,13 +60,13 @@ export async function buildBurnTx(
   // ── 1. Fetch UTxOs ────────────────────────────────────────────────────────
 
   // Pool UTxO — the single UTxO locked at the script address.
-  const poolUtxos: UTxO[] = await provider.fetchAddressUtxos(poolAddress);
+  const poolUtxos: UTxO[] = await provider.fetchAddressUTxOs(poolAddress);
   if (poolUtxos.length === 0) throw new Error("Pool UTxO not found");
   const poolUtxo = poolUtxos[0];
 
   // Pyth State NFT UTxO — reference input carrying the oracle state.
   const pythStateUnit = PARAMS.PYTH_POLICY_ID + PYTH.STATE_ASSET_NAME;
-  const pythUtxos: UTxO[] = await provider.fetchAddressUtxos(PYTH.STATE_ADDRESS, pythStateUnit);
+  const pythUtxos: UTxO[] = await provider.fetchAddressUTxOs(PYTH.STATE_ADDRESS, pythStateUnit);
   if (pythUtxos.length === 0) throw new Error("Pyth State NFT UTxO not found");
   const stateUtxo = pythUtxos[0];
 
@@ -97,14 +94,15 @@ export async function buildBurnTx(
   // ── 3. Build datums and redeemers ─────────────────────────────────────────
 
   // Keep the existing pool datum (owner stays the same).
+  // In Mesh "Data" format: ByteArray is a plain hex string, Constr is mConStr0.
   const ownerPkh = deserializeAddress(walletAddress).pubKeyHash;
-  const poolDatum = mConStr0([mBytes(ownerPkh)]);
+  const poolDatum = mConStr0([ownerPkh]);
 
   // Action.Burn — Constr(1, [])
   const burnRedeemer = mConStr1([]);
 
   // Pyth withdraw redeemer — List<ByteArray> with the signed price message.
-  const pythRedeemer = mList([mBytes(pythHex)]);
+  const pythRedeemer = [pythHex];
 
   const col = collateral[0];
 
