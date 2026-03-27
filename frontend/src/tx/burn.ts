@@ -11,8 +11,7 @@ import {
   type UTxO,
   type BrowserWallet,
 } from "@meshsdk/core";
-import { getPythScriptHash } from "@pythnetwork/pyth-lazer-cardano-js";
-
+import { addVKeyWitnessSetToTransaction } from "@meshsdk/core-cst";
 import {
   UNPARAMETERISED_SCRIPT_CBOR,
   PARAMS,
@@ -59,6 +58,14 @@ export async function buildBurnTx(
   const provider = new BlockfrostProvider(blockfrostKey);
   const { scriptCbor, scriptHash, poolAddress } = getScript();
 
+  // Bounded validity range required by the Pyth verify script.
+  const latestBlockResp = await fetch(
+    "https://cardano-preprod.blockfrost.io/api/v0/blocks/latest",
+    { headers: { project_id: blockfrostKey } }
+  );
+  const latestBlock = await latestBlockResp.json();
+  const currentSlot: number = latestBlock.slot;
+
   // ── 1. Fetch UTxOs ────────────────────────────────────────────────────────
 
   // Pool UTxO — the single UTxO locked at the script address.
@@ -72,8 +79,10 @@ export async function buildBurnTx(
   if (pythUtxos.length === 0) throw new Error("Pyth State NFT UTxO not found");
   const stateUtxo = pythUtxos[0];
 
-  // Read the withdraw script hash dynamically from the Pyth State inline datum.
-  const withdrawScriptHash = getPythScriptHash(stateUtxo as any);
+  // Use the hardcoded withdraw script hash (same approach as mint.ts).
+  // getPythScriptHash() fails because Blockfrost returns the datum in a format
+  // the function doesn't recognise.
+  const withdrawScriptHash = PYTH.WITHDRAW_SCRIPT_HASH;
   const withdrawAddress = serializeRewardAddress(withdrawScriptHash, true, 0);
 
   // Find the UTxO at the Pyth State address that has the withdraw script published as a reference script.
@@ -83,24 +92,43 @@ export async function buildBurnTx(
   );
   if (!withdrawRefUtxo) throw new Error("Pyth withdraw reference script UTxO not found");
 
-  // User UTxOs — for synth token input and collateral.
-  const walletUtxos: UTxO[] = await wallet.getUtxos();
-  const collateral: UTxO[] = await wallet.getCollateral();
-  if (collateral.length === 0)
-    throw new Error("No collateral set in wallet. Enable collateral in your wallet settings.");
+  const walletAddress = await (wallet as any).getChangeAddressBech32();
 
-  const walletAddress = await wallet.getChangeAddress();
+  // wallet.getUtxos() also returns raw CBOR — use Blockfrost to get decoded UTxOs instead.
+  const walletUtxos: UTxO[] = await provider.fetchAddressUTxOs(walletAddress);
+
+  // wallet.getCollateral() returns raw CIP-30 CBOR hex strings, not decoded UTxOs.
+  // CBOR: 82 82 5820 <32B txHash> <uint outputIndex> 82 5839 <57B address> <uint lovelace>
+  const collateralRaw: string[] = (await wallet.getCollateral()) as unknown as string[];
+  if (collateralRaw.length === 0)
+    throw new Error("No collateral set in wallet. Enable collateral in your wallet settings.");
+  const colTxHash = collateralRaw[0].slice(8, 72);
+  const colOiByte = parseInt(collateralRaw[0].slice(72, 74), 16);
+  const colIndex = colOiByte <= 23 ? colOiByte : parseInt(collateralRaw[0].slice(74, 76), 16);
+  // Construct collateral UTxO directly — address is always the user's wallet address.
+  const col: UTxO = {
+    input: { txHash: colTxHash, outputIndex: colIndex },
+    output: { address: walletAddress, amount: [{ unit: "lovelace", quantity: "5000000" }] },
+  };
 
   // ── 2. Compute amounts ────────────────────────────────────────────────────
 
   const adaToReturn = computeBurnReturn(synthToBurn, adaUsdPrice);
+  console.log("[buildBurnTx] synthToBurn:", synthToBurn.toString(), "adaUsdPrice:", adaUsdPrice, "adaToReturn:", adaToReturn.toString());
   if (adaToReturn <= 0n) throw new Error("ADA return amount too small");
 
   const currentPoolLovelace = BigInt(
     poolUtxo.output.amount.find((a) => a.unit === "lovelace")?.quantity ?? "0"
   );
-  if (adaToReturn > currentPoolLovelace)
-    throw new Error("Insufficient ADA in pool for this burn amount");
+  console.log("[buildBurnTx] currentPoolLovelace:", currentPoolLovelace.toString());
+  if (adaToReturn > currentPoolLovelace) {
+    const rawPrice = BigInt(Math.round(adaUsdPrice * 1e8));
+    const maxBurnable = (currentPoolLovelace * rawPrice) / 100_000_000n;
+    throw new Error(
+      `Insufficient ADA in pool. Max burnable synth at current price: ${maxBurnable} micro-synth (${Number(maxBurnable) / 1e6} synth). ` +
+      `You may have old tokens from a previous contract deployment — burn only what you minted in this session.`
+    );
+  }
 
   const newPoolLovelace = currentPoolLovelace - adaToReturn;
 
@@ -108,7 +136,17 @@ export async function buildBurnTx(
 
   // Read owner PKH from the pool datum — this is what the validator checks.
   // PoolDatum is Constr(0, [owner_pkh_hex]).
-  const datumOwnerPkh: string = (poolUtxo.output.plutusData as any)?.fields?.[0] ?? "";
+  // Blockfrost decodes inline datums as { constructor: N, fields: [{ bytes: "..." }] }
+  // so we need .fields[0].bytes, not .fields[0] directly.
+  // plutusData from Blockfrost is raw CBOR hex, e.g.:
+  //   d8799f581c<28-byte-pkh>ff
+  //   d879 = tag 121 (Constr 0), 9f = indef array, 581c = 28-byte bytestring
+  // Extract the 28-byte (56 hex char) PKH directly from the CBOR string.
+  const plutusCbor = poolUtxo.output.plutusData as string;
+  const CONSTR0_PREFIX = "d8799f581c"; // Constr(0,[ByteArray(28)])
+  const datumOwnerPkh: string = plutusCbor?.startsWith(CONSTR0_PREFIX)
+    ? plutusCbor.slice(CONSTR0_PREFIX.length, CONSTR0_PREFIX.length + 56)
+    : "";
   if (!datumOwnerPkh) throw new Error("Could not read owner from pool datum");
 
   // Fail fast if the connected wallet is not the position owner.
@@ -125,9 +163,12 @@ export async function buildBurnTx(
   // Pyth withdraw redeemer — List<ByteArray> with the signed price message.
   const pythRedeemer = [pythHex];
 
-  const col = collateral[0];
 
   // ── 4. Build transaction ──────────────────────────────────────────────────
+
+  const exSpend    = { mem: 2_000_000, steps: 1_000_000_000 };
+  const exMint     = { mem: 4_000_000, steps: 2_000_000_000 };
+  const exWithdraw = { mem: 8_000_000, steps: 5_000_000_000 };
 
   const txBuilder = new MeshTxBuilder({ fetcher: provider, submitter: provider });
 
@@ -141,7 +182,7 @@ export async function buildBurnTx(
       poolUtxo.output.address
     )
     .txInInlineDatumPresent()
-    .txInRedeemerValue(burnRedeemer, "Mesh")
+    .txInRedeemerValue(burnRedeemer, "Mesh", exSpend)
     .txInScript(scriptCbor)
 
     // Return pool UTxO with decreased ADA + same datum.
@@ -152,7 +193,7 @@ export async function buildBurnTx(
     .mintPlutusScriptV3()
     .mint((-synthToBurn).toString(), scriptHash, "")
     .mintingScript(scriptCbor)
-    .mintRedeemerValue(burnRedeemer, "Mesh")
+    .mintRedeemerValue(burnRedeemer, "Mesh", exMint)
 
     // Pyth State NFT as reference input (never spent).
     .readOnlyTxInReference(stateUtxo.input.txHash, stateUtxo.input.outputIndex)
@@ -160,15 +201,15 @@ export async function buildBurnTx(
     // Zero-ADA withdrawal from Pyth verify script — carries the signed price message.
     // Address and script hash derived dynamically from the Pyth State datum.
     // Script is referenced by UTxO (no CBOR needed).
-    .withdrawal(withdrawAddress, "0")
     .withdrawalPlutusScriptV3()
+    .withdrawal(withdrawAddress, "0")
     .withdrawalTxInReference(
       withdrawRefUtxo.input.txHash,
       withdrawRefUtxo.input.outputIndex,
       String(withdrawRefUtxo.output.scriptRef?.length ? withdrawRefUtxo.output.scriptRef.length / 2 : 0),
       withdrawScriptHash
     )
-    .withdrawalRedeemerValue(pythRedeemer, "Mesh")
+    .withdrawalRedeemerValue(pythRedeemer, "Mesh", exWithdraw)
 
     // Collateral + change.
     .txInCollateral(
@@ -180,9 +221,12 @@ export async function buildBurnTx(
     .changeAddress(walletAddress)
     .selectUtxosFrom(walletUtxos)
     .requiredSignerHash(datumOwnerPkh) // Burn requires owner signature (on-chain check)
+    .invalidBefore(currentSlot - 60)
+    .invalidHereafter(currentSlot + 600)
     .complete();
 
   const unsignedTx = txBuilder.txHex;
-  const signedTx = await wallet.signTx(unsignedTx);
-  return wallet.submitTx(signedTx);
+  const witnessSet = await wallet.signTx(unsignedTx);
+  const signedTx = addVKeyWitnessSetToTransaction(unsignedTx, witnessSet);
+  return provider.submitTx(signedTx);
 }

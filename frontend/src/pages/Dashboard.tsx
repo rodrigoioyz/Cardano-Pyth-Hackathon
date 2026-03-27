@@ -51,7 +51,10 @@ export default function Dashboard() {
 
       setBurnResult({ ok: true, msg: `Tx enviada: ${txHash}` });
     } catch (e: any) {
-      setBurnResult({ ok: false, msg: e.message ?? "Error desconocido" });
+      console.error("[handleBurn] error:", e);
+      if (e?.info) console.error("[handleBurn] node error info:", JSON.stringify(e.info));
+      if (e?.data) console.error("[handleBurn] error data:", JSON.stringify(e.data));
+      setBurnResult({ ok: false, msg: e?.info ?? e.message ?? "Error desconocido" });
     } finally {
       setBurnLoading(false);
     }
@@ -79,7 +82,11 @@ export default function Dashboard() {
 
       setMintResult({ ok: true, msg: `Tx enviada: ${txHash}` });
     } catch (e: any) {
-      setMintResult({ ok: false, msg: e.message ?? "Error desconocido" });
+      console.error("[handleMint] error:", e);
+      // CIP-30 TxSendError has .info with the actual node rejection reason
+      if (e?.info) console.error("[handleMint] node error info:", JSON.stringify(e.info));
+      if (e?.data) console.error("[handleMint] error data:", JSON.stringify(e.data));
+      setMintResult({ ok: false, msg: e?.info ?? e.message ?? "Error desconocido" });
     } finally {
       setMintLoading(false);
     }

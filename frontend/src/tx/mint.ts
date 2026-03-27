@@ -4,11 +4,13 @@ import {
   applyParamsToScript,
   serializePlutusScript,
   resolvePlutusScriptHash,
+  serializeRewardAddress,
   deserializeAddress,
   mConStr0,
   type UTxO,
   type BrowserWallet,
 } from "@meshsdk/core";
+import { addVKeyWitnessSetToTransaction } from "@meshsdk/core-cst";
 import {
   UNPARAMETERISED_SCRIPT_CBOR,
   PARAMS,
@@ -66,6 +68,17 @@ export async function buildMintTx(
   const { scriptCbor, scriptHash, poolAddress } = getScript();
   console.log("api key de blockfrost mint.ts",blockfrostKey);
 
+  // Fetch the current slot so we can set a bounded validity range.
+  // The Pyth verify script checks: tx.validity_range ⊆ trusted_key.valid_range.
+  // A tx without invalidBefore/invalidHereafter has validity (-∞,+∞) which is
+  // never ⊆ a finite key range → is_trusted always fails without this.
+  const latestBlockResp = await fetch(
+    "https://cardano-preprod.blockfrost.io/api/v0/blocks/latest",
+    { headers: { project_id: blockfrostKey } }
+  );
+  const latestBlock = await latestBlockResp.json();
+  const currentSlot: number = latestBlock.slot;
+
   // ── 1. Fetch UTxOs ────────────────────────────────────────────────────────
 
   // Pool UTxO — the single UTxO locked at the script address.
@@ -82,10 +95,10 @@ export async function buildMintTx(
   console.log("utxos de pyth",pythUtxos);
   const stateUtxo = pythUtxos[0];
 
-  // Use hardcoded values from contract.ts — the preprod Pyth State UTxO stores
-  // its datum by hash (not inline), so we can't derive these dynamically.
+  // Compute withdraw address from hardcoded script hash using MeshSDK's own
+  // serializer (avoids relying on a manually-computed bech32 value).
   const withdrawScriptHash = PYTH.WITHDRAW_SCRIPT_HASH;
-  const withdrawAddress = PYTH.WITHDRAW_ADDRESS;
+  const withdrawAddress = serializeRewardAddress(withdrawScriptHash, true, 0);
   console.log("[buildMintTx] withdrawScriptHash:", withdrawScriptHash);
   console.log("[buildMintTx] withdrawAddress:", withdrawAddress);
 
@@ -98,13 +111,25 @@ export async function buildMintTx(
   if (!withdrawRefUtxo) throw new Error("Pyth withdraw reference script UTxO not found");
   console.log("[buildMintTx] withdrawRefUtxo:", withdrawRefUtxo.input);
 
-  // User UTxOs — for ADA input and collateral.
-  const walletUtxos: UTxO[] = await wallet.getUtxos();
-  const collateral: UTxO[] = await wallet.getCollateral();
-  if (collateral.length === 0)
-    throw new Error("No collateral set in wallet. Enable collateral in your wallet settings.");
+  // getChangeAddress() returns raw hex CBOR (CIP-30); use getChangeAddressBech32() for bech32.
+  const walletAddress = await (wallet as any).getChangeAddressBech32();
 
-  const walletAddress = await wallet.getChangeAddress();
+  // wallet.getUtxos() also returns raw CBOR — use Blockfrost to get decoded UTxOs instead.
+  const walletUtxos: UTxO[] = await provider.fetchAddressUTxOs(walletAddress);
+
+  // wallet.getCollateral() returns raw CIP-30 CBOR hex strings, not decoded UTxOs.
+  // CBOR: 82 82 5820 <32B txHash> <uint outputIndex> 82 5839 <57B address> <uint lovelace>
+  const collateralRaw: string[] = (await wallet.getCollateral()) as unknown as string[];
+  if (collateralRaw.length === 0)
+    throw new Error("No collateral set in wallet. Enable collateral in your wallet settings.");
+  const colTxHash = collateralRaw[0].slice(8, 72);
+  const colOiByte = parseInt(collateralRaw[0].slice(72, 74), 16);
+  const colIndex = colOiByte <= 23 ? colOiByte : parseInt(collateralRaw[0].slice(74, 76), 16);
+  // Construct collateral UTxO directly — address is always the user's wallet address.
+  const col: UTxO = {
+    input: { txHash: colTxHash, outputIndex: colIndex },
+    output: { address: walletAddress, amount: [{ unit: "lovelace", quantity: "5000000" }] },
+  };
 
   // ── 2. Compute amounts ────────────────────────────────────────────────────
 
@@ -131,9 +156,13 @@ export async function buildMintTx(
   // The backend returns solanaPayload (Solana wire format, magic b9011a82).
   const pythRedeemer = [pythHex];
 
-  const col = collateral[0];
-
   // ── 4. Build transaction ──────────────────────────────────────────────────
+
+  // Explicit execution units per redeemer — avoids the 21M default (3×7M > 16.5M protocol limit).
+  // Total: 2M + 4M + 8M = 14M mem < 16.5M; 1B + 2B + 5B = 8B steps < 10B.
+  const exSpend    = { mem: 2_000_000, steps: 1_000_000_000 };
+  const exMint     = { mem: 4_000_000, steps: 2_000_000_000 };
+  const exWithdraw = { mem: 8_000_000, steps: 5_000_000_000 };
 
   const txBuilder = new MeshTxBuilder({ fetcher: provider, submitter: provider });
 
@@ -149,7 +178,7 @@ export async function buildMintTx(
         poolUtxo.output.address
       )
       .txInInlineDatumPresent()
-      .txInRedeemerValue(mintRedeemer, "Mesh")
+      .txInRedeemerValue(mintRedeemer, "Mesh", exSpend)
       .txInScript(scriptCbor);
   }
 
@@ -162,7 +191,7 @@ export async function buildMintTx(
     .mintPlutusScriptV3()
     .mint(mintAmount.toString(), scriptHash, "")
     .mintingScript(scriptCbor)
-    .mintRedeemerValue(mintRedeemer, "Mesh")
+    .mintRedeemerValue(mintRedeemer, "Mesh", exMint)
 
     // Pyth State NFT as reference input (never spent).
     .readOnlyTxInReference(stateUtxo.input.txHash, stateUtxo.input.outputIndex)
@@ -170,15 +199,15 @@ export async function buildMintTx(
     // Zero-ADA withdrawal from Pyth verify script — carries the signed price message.
     // Address and script hash derived dynamically from the Pyth State datum.
     // Script is referenced by UTxO (no CBOR needed).
-    .withdrawal(withdrawAddress, "0")
     .withdrawalPlutusScriptV3()
+    .withdrawal(withdrawAddress, "0")
     .withdrawalTxInReference(
       withdrawRefUtxo.input.txHash,
       withdrawRefUtxo.input.outputIndex,
       String(withdrawRefUtxo.output.scriptRef?.length ? withdrawRefUtxo.output.scriptRef.length / 2 : 0),
       withdrawScriptHash
     )
-    .withdrawalRedeemerValue(pythRedeemer, "Mesh")
+    .withdrawalRedeemerValue(pythRedeemer, "Mesh", exWithdraw)
 
     // Collateral + change.
     .txInCollateral(
@@ -189,9 +218,15 @@ export async function buildMintTx(
     )
     .changeAddress(walletAddress)
     .selectUtxosFrom(walletUtxos)
+    .invalidBefore(currentSlot - 60)
+    .invalidHereafter(currentSlot + 600)
     .complete();
 
   const unsignedTx = txBuilder.txHex;
-  const signedTx = await wallet.signTx(unsignedTx);
-  return wallet.submitTx(signedTx);
+  // wallet.signTx() returns just the CIP-30 witness set (a1...), not the merged tx.
+  // addVKeyWitnessSetToTransaction merges the witness set into the full transaction.
+  const witnessSet = await wallet.signTx(unsignedTx);
+  const signedTx = addVKeyWitnessSetToTransaction(unsignedTx, witnessSet);
+  console.log("[buildMintTx] signedTx first bytes:", signedTx.substring(0, 8));
+  return provider.submitTx(signedTx);
 }

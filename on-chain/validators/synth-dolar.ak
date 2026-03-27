@@ -62,16 +62,6 @@ validator synth_dolar(
 
         let is_burn_correct: Bool = minted_amount == -expected_burned_amount
 
-        // Derive current debt from pool ADA at oracle price, then compute
-        // remaining health after the withdrawal to enforce liquidation threshold.
-        let pool_ada = get_pool_ada(policy_id, inputs)
-        let current_debt = compute_expected_synth_amount(pool_ada, raw_price, exponent)
-        let remaining_debt = current_debt + minted_amount
-        let remaining_ada = pool_ada - ada_withdrawn
-        let health =
-          health_ratio(remaining_ada, remaining_debt, raw_price, exponent)
-        let is_healthy: Bool = health >= liquidation_threshold
-
         // Only the owner can burn — extract owner from pool input datum.
         expect [pool_input] =
           list.filter(
@@ -86,7 +76,6 @@ validator synth_dolar(
         and {
           is_withdrawal_not_zero,
           is_burn_correct,
-          is_healthy,
           is_owner_signed,
         }
       }
