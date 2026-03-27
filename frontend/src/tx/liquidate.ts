@@ -10,7 +10,7 @@ import {
   type UTxO,
   type BrowserWallet,
 } from "@meshsdk/core";
-import { getPythScriptHash } from "@pythnetwork/pyth-lazer-cardano-js";
+import { addVKeyWitnessSetToTransaction } from "@meshsdk/core-cst";
 
 import {
   UNPARAMETERISED_SCRIPT_CBOR,
@@ -61,37 +61,47 @@ export async function buildLiquidateTx(
   const provider = new BlockfrostProvider(blockfrostKey);
   const { scriptCbor, scriptHash, poolAddress } = getScript();
 
+  // Bounded validity range required by the Pyth verify script.
+  const latestBlockResp = await fetch(
+    "https://cardano-preprod.blockfrost.io/api/v0/blocks/latest",
+    { headers: { project_id: blockfrostKey } }
+  );
+  const latestBlock = await latestBlockResp.json();
+  const currentSlot: number = latestBlock.slot;
+
   // ── 1. Fetch UTxOs ────────────────────────────────────────────────────────
 
-  // Pool UTxO — the single UTxO locked at the script address.
   const poolUtxos: UTxO[] = await provider.fetchAddressUTxOs(poolAddress);
   if (poolUtxos.length === 0) throw new Error("Pool UTxO not found");
   const poolUtxo = poolUtxos[0];
 
-  // Pyth State NFT UTxO — reference input carrying the oracle state.
   const pythStateUnit = PARAMS.PYTH_POLICY_ID + PYTH.STATE_ASSET_NAME;
   const pythUtxos: UTxO[] = await provider.fetchAddressUTxOs(PYTH.STATE_ADDRESS, pythStateUnit);
   if (pythUtxos.length === 0) throw new Error("Pyth State NFT UTxO not found");
   const stateUtxo = pythUtxos[0];
 
-  // Read the withdraw script hash dynamically from the Pyth State inline datum.
-  const withdrawScriptHash = getPythScriptHash(stateUtxo as any);
+  const withdrawScriptHash = PYTH.WITHDRAW_SCRIPT_HASH;
   const withdrawAddress = serializeRewardAddress(withdrawScriptHash, true, 0);
 
-  // Find the UTxO at the Pyth State address that has the withdraw script published as a reference script.
   const allPythUtxos: UTxO[] = await provider.fetchAddressUTxOs(PYTH.STATE_ADDRESS);
   const withdrawRefUtxo = allPythUtxos.find(
     (u) => u.output.scriptHash === withdrawScriptHash
   );
   if (!withdrawRefUtxo) throw new Error("Pyth withdraw reference script UTxO not found");
 
-  // Liquidator UTxOs — for collateral; ADA reward goes to liquidator's change address.
-  const walletUtxos: UTxO[] = await wallet.getUtxos();
-  const collateral: UTxO[] = await wallet.getCollateral();
-  if (collateral.length === 0)
-    throw new Error("No collateral set in wallet. Enable collateral in your wallet settings.");
+  const walletAddress = await (wallet as any).getChangeAddressBech32();
+  const walletUtxos: UTxO[] = await provider.fetchAddressUTxOs(walletAddress);
 
-  const walletAddress = await wallet.getChangeAddress();
+  const collateralRaw: string[] = (await wallet.getCollateral()) as unknown as string[];
+  if (collateralRaw.length === 0)
+    throw new Error("No collateral set in wallet. Enable collateral in your wallet settings.");
+  const colTxHash = collateralRaw[0].slice(8, 72);
+  const colOiByte = parseInt(collateralRaw[0].slice(72, 74), 16);
+  const colIndex = colOiByte <= 23 ? colOiByte : parseInt(collateralRaw[0].slice(74, 76), 16);
+  const col: UTxO = {
+    input: { txHash: colTxHash, outputIndex: colIndex },
+    output: { address: walletAddress, amount: [{ unit: "lovelace", quantity: "5000000" }] },
+  };
 
   // ── 2. Compute amounts ────────────────────────────────────────────────────
 
@@ -108,10 +118,14 @@ export async function buildLiquidateTx(
 
   // ── 3. Build datums and redeemers ─────────────────────────────────────────
 
-  // Preserve the existing pool datum owner from the inline datum on the pool UTxO.
-  // In Mesh "Data" format: ByteArray is a plain hex string, Constr is mConStr0.
-  const existingOwnerPkh =
-    (poolUtxo.output.plutusData as any)?.fields?.[0] ?? "";
+  // Parse owner PKH from CBOR inline datum (same format as burn.ts).
+  const plutusCbor = poolUtxo.output.plutusData as string;
+  const CONSTR0_PREFIX = "d8799f581c";
+  const existingOwnerPkh: string = plutusCbor?.startsWith(CONSTR0_PREFIX)
+    ? plutusCbor.slice(CONSTR0_PREFIX.length, CONSTR0_PREFIX.length + 56)
+    : "";
+  if (!existingOwnerPkh) throw new Error("Could not read owner from pool datum");
+
   const poolDatum = mConStr0([existingOwnerPkh]);
 
   // Action.Liquidate — Constr(2, [])
@@ -120,14 +134,15 @@ export async function buildLiquidateTx(
   // Pyth withdraw redeemer — List<ByteArray> with the signed price message.
   const pythRedeemer = [pythHex];
 
-  const col = collateral[0];
-
   // ── 4. Build transaction ──────────────────────────────────────────────────
+
+  const exSpend    = { mem: 2_000_000, steps: 1_000_000_000 };
+  const exMint     = { mem: 4_000_000, steps: 2_000_000_000 };
+  const exWithdraw = { mem: 8_000_000, steps: 5_000_000_000 };
 
   const txBuilder = new MeshTxBuilder({ fetcher: provider, submitter: provider });
 
   await txBuilder
-    // Spend the pool UTxO (spend validator delegates to mint validator).
     .spendingPlutusScriptV3()
     .txIn(
       poolUtxo.input.txHash,
@@ -136,36 +151,29 @@ export async function buildLiquidateTx(
       poolUtxo.output.address
     )
     .txInInlineDatumPresent()
-    .txInRedeemerValue(liquidateRedeemer, "Mesh")
+    .txInRedeemerValue(liquidateRedeemer, "Mesh", exSpend)
     .txInScript(scriptCbor)
 
-    // Return pool UTxO with decreased ADA + same datum.
     .txOut(poolAddress, [{ unit: "lovelace", quantity: newPoolLovelace.toString() }])
     .txOutInlineDatumValue(poolDatum, "Mesh")
 
-    // Burn synth tokens (negative mint amount).
     .mintPlutusScriptV3()
     .mint((-synthToBurn).toString(), scriptHash, "")
     .mintingScript(scriptCbor)
-    .mintRedeemerValue(liquidateRedeemer, "Mesh")
+    .mintRedeemerValue(liquidateRedeemer, "Mesh", exMint)
 
-    // Pyth State NFT as reference input (never spent).
     .readOnlyTxInReference(stateUtxo.input.txHash, stateUtxo.input.outputIndex)
 
-    // Zero-ADA withdrawal from Pyth verify script — carries the signed price message.
-    // Address and script hash derived dynamically from the Pyth State datum.
-    // Script is referenced by UTxO (no CBOR needed).
-    .withdrawal(withdrawAddress, "0")
     .withdrawalPlutusScriptV3()
+    .withdrawal(withdrawAddress, "0")
     .withdrawalTxInReference(
       withdrawRefUtxo.input.txHash,
       withdrawRefUtxo.input.outputIndex,
       String(withdrawRefUtxo.output.scriptRef?.length ? withdrawRefUtxo.output.scriptRef.length / 2 : 0),
       withdrawScriptHash
     )
-    .withdrawalRedeemerValue(pythRedeemer, "Mesh")
+    .withdrawalRedeemerValue(pythRedeemer, "Mesh", exWithdraw)
 
-    // Collateral + change (liquidator receives the ADA profit via change).
     .txInCollateral(
       col.input.txHash,
       col.input.outputIndex,
@@ -175,9 +183,12 @@ export async function buildLiquidateTx(
     .changeAddress(walletAddress)
     .selectUtxosFrom(walletUtxos)
     // No requiredSignerHash — liquidation is permissionless.
+    .invalidBefore(currentSlot - 60)
+    .invalidHereafter(currentSlot + 600)
     .complete();
 
   const unsignedTx = txBuilder.txHex;
-  const signedTx = await wallet.signTx(unsignedTx);
-  return wallet.submitTx(signedTx);
+  const witnessSet = await wallet.signTx(unsignedTx);
+  const signedTx = addVKeyWitnessSetToTransaction(unsignedTx, witnessSet);
+  return provider.submitTx(signedTx);
 }

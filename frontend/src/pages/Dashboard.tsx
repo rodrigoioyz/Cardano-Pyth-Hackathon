@@ -6,6 +6,7 @@ import { useState, useEffect } from "react";
 import { useWallet } from "@meshsdk/react";
 import { buildMintTx } from "../tx/mint";
 import { buildBurnTx } from "../tx/burn";
+import { buildLiquidateTx } from "../tx/liquidate";
 
 const ff =
   "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', sans-serif";
@@ -30,6 +31,40 @@ export default function Dashboard() {
   const [synthInput, setSynthInput] = useState("");
   const [burnLoading, setBurnLoading] = useState(false);
   const [burnResult, setBurnResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  // Liquidate modal state
+  const [liquidateOpen, setLiquidateOpen] = useState(false);
+  const [liquidateSynthInput, setLiquidateSynthInput] = useState("");
+  const [liquidateLoading, setLiquidateLoading] = useState(false);
+  const [liquidateResult, setLiquidateResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  const handleLiquidate = async () => {
+    const synthFloat = parseFloat(liquidateSynthInput);
+    if (!synthFloat || synthFloat <= 0) return;
+
+    setLiquidateLoading(true);
+    setLiquidateResult(null);
+
+    try {
+      const res = await fetch(`${API_URL}/api/get-adaprice`);
+      const data = await res.json();
+      const pythHex: string = data.solanaPayload;
+      const adaUsdPrice: number = data.price;
+
+      const synthMicro = BigInt(Math.round(synthFloat * 1_000_000));
+
+      const txHash = await buildLiquidateTx(wallet as any, synthMicro, pythHex, adaUsdPrice, BLOCKFROST_KEY);
+
+      setLiquidateResult({ ok: true, msg: `Tx enviada: ${txHash}` });
+    } catch (e: any) {
+      console.error("[handleLiquidate] error:", e);
+      if (e?.info) console.error("[handleLiquidate] node error info:", JSON.stringify(e.info));
+      if (e?.data) console.error("[handleLiquidate] error data:", JSON.stringify(e.data));
+      setLiquidateResult({ ok: false, msg: e?.info ?? e.message ?? "Error desconocido" });
+    } finally {
+      setLiquidateLoading(false);
+    }
+  };
 
   const handleBurn = async () => {
     const synthFloat = parseFloat(synthInput);
@@ -333,6 +368,33 @@ export default function Dashboard() {
             >
               Burn
             </button>
+            <button
+              onClick={() => { setLiquidateOpen(true); setLiquidateResult(null); setLiquidateSynthInput(""); }}
+              style={{
+                background: "rgba(255,159,10,0.15)",
+                border: "1px solid rgba(255,159,10,0.35)",
+                borderRadius: 980,
+                color: "#ff9f0a",
+                fontSize: 16,
+                fontWeight: 600,
+                padding: "14px 48px",
+                cursor: "pointer",
+                fontFamily: ff,
+                letterSpacing: "-0.2px",
+                boxShadow: "0 4px 24px rgba(255,159,10,0.15)",
+                transition: "transform 0.15s, box-shadow 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = "scale(1.03)";
+                e.currentTarget.style.boxShadow = "0 6px 32px rgba(255,159,10,0.3)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = "scale(1)";
+                e.currentTarget.style.boxShadow = "0 4px 24px rgba(255,159,10,0.15)";
+              }}
+            >
+              Liquidate
+            </button>
           </div>
         )}
 
@@ -571,6 +633,91 @@ export default function Dashboard() {
                 }}
               >
                 {burnLoading ? "Procesando..." : "Confirmar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Liquidate Modal */}
+      {liquidateOpen && (
+        <div
+          onClick={() => !liquidateLoading && setLiquidateOpen(false)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 9999,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: "rgba(0,0,0,0.6)", backdropFilter: "blur(16px)",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "rgba(28,28,30,0.97)",
+              border: "1px solid rgba(255,159,10,0.2)",
+              borderRadius: 20, padding: 28, width: 360,
+              boxShadow: "0 40px 100px rgba(0,0,0,0.8)", fontFamily: ff,
+            }}
+          >
+            <h2 style={{ color: "#ff9f0a", fontSize: 18, fontWeight: 600, marginBottom: 6 }}>
+              Liquidate Position
+            </h2>
+            <p style={{ color: "#98989d", fontSize: 13, marginBottom: 20 }}>
+              Quema synth de una posición undercollateralizada. Cualquiera puede liquidar.
+            </p>
+
+            <input
+              type="number"
+              min="0"
+              placeholder="Ej: 5.00"
+              value={liquidateSynthInput}
+              onChange={(e) => setLiquidateSynthInput(e.target.value)}
+              style={{
+                width: "100%", boxSizing: "border-box",
+                background: "rgba(255,255,255,0.06)",
+                border: "1px solid rgba(255,159,10,0.25)",
+                borderRadius: 12, padding: "12px 16px",
+                color: "#f5f5f7", fontSize: 16, fontFamily: ff,
+                outline: "none", marginBottom: 8,
+              }}
+            />
+            <p style={{ color: "#98989d", fontSize: 12, marginBottom: 20 }}>
+              Precio actual: ${price.toFixed(4)} · Recibirás ≈ {liquidateSynthInput ? (parseFloat(liquidateSynthInput) / price).toFixed(4) : "0"} ADA
+            </p>
+
+            {liquidateResult && (
+              <p style={{
+                color: liquidateResult.ok ? "#30d158" : "#ff453a",
+                fontSize: 13, marginBottom: 16,
+                wordBreak: "break-all",
+              }}>
+                {liquidateResult.msg}
+              </p>
+            )}
+
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                onClick={() => setLiquidateOpen(false)}
+                disabled={liquidateLoading}
+                style={{
+                  flex: 1, padding: "12px 0", borderRadius: 12,
+                  background: "rgba(255,255,255,0.07)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  color: "#98989d", fontSize: 15, cursor: "pointer", fontFamily: ff,
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleLiquidate}
+                disabled={liquidateLoading || !liquidateSynthInput}
+                style={{
+                  flex: 1, padding: "12px 0", borderRadius: 12,
+                  background: liquidateLoading ? "rgba(255,159,10,0.3)" : "rgba(255,159,10,0.85)",
+                  border: "none", color: "#fff", fontSize: 15,
+                  fontWeight: 600, cursor: liquidateLoading ? "not-allowed" : "pointer", fontFamily: ff,
+                }}
+              >
+                {liquidateLoading ? "Procesando..." : "Liquidar"}
               </button>
             </div>
           </div>
