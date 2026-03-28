@@ -64,6 +64,17 @@ export function computeMintAmount(lovelaces: bigint, price: number): bigint {
 }
 
 /**
+ * ADA lovelaces required to mint a given synth amount.
+ * Inverse of computeMintAmount.
+ *
+ *   lovelaces = synthMicro × 10^8 × collateralRatio / (rawPrice × 100)
+ */
+export function computeLovelacesForSynth(synthMicro: bigint, price: number): bigint {
+  const rawPrice = BigInt(Math.round(price * 1e8));
+  return (synthMicro * 100_000_000n * BigInt(PARAMS.COLLATERAL_RATIO) + rawPrice * 100n - 1n) / (rawPrice * 100n);
+}
+
+/**
  * ADA lovelaces returned when burning a given synth amount.
  *
  * On-chain formula (integer division):

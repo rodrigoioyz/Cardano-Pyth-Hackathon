@@ -7,6 +7,7 @@ import { useWallet } from "@meshsdk/react";
 import { buildMintTx } from "../tx/mint";
 import { buildBurnTx } from "../tx/burn";
 import { buildLiquidateTx } from "../tx/liquidate";
+import { computeLovelacesForSynth } from "../tx/contract";
 
 const ff =
   "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', sans-serif";
@@ -23,6 +24,7 @@ export default function Dashboard() {
   // Mint modal state
   const [mintOpen, setMintOpen] = useState(false);
   const [adaInput, setAdaInput] = useState("");
+  const [cropInput, setCropInput] = useState("");
   const [mintLoading, setMintLoading] = useState(false);
   const [mintResult, setMintResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
@@ -96,8 +98,8 @@ export default function Dashboard() {
   };
 
   const handleMint = async () => {
-    const adaFloat = parseFloat(adaInput);
-    if (!adaFloat || adaFloat <= 0) return;
+    const qty = parseFloat(adaInput);
+    if (!qty || qty <= 0 || !cropInput.trim()) return;
 
     setMintLoading(true);
     setMintResult(null);
@@ -109,11 +111,16 @@ export default function Dashboard() {
       const pythHex: string = data.solanaPayload;
       const adaUsdPrice: number = data.price;
 
-      // 2. Convert ADA to lovelaces (bigint)
-      const lovelaces = BigInt(Math.round(adaFloat * 1_000_000));
+      // 2. Farmer chose N tokens → compute required ADA lovelaces automatically
+      const synthMicro = BigInt(Math.round(qty * 1_000_000));
+      const lovelaces = computeLovelacesForSynth(synthMicro, adaUsdPrice);
 
-      // 3. Build, sign and submit the mint tx
-      const txHash = await buildMintTx(wallet as any, lovelaces, pythHex, adaUsdPrice, BLOCKFROST_KEY);
+      // 3. Crop name to hex (UTF-8) — farmer never sees hex
+      const assetNameHex = Array.from(new TextEncoder().encode(cropInput.trim()))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+
+      const txHash = await buildMintTx(wallet as any, lovelaces, pythHex, adaUsdPrice, BLOCKFROST_KEY, assetNameHex);
 
       setMintResult({ ok: true, msg: `Tx enviada: ${txHash}` });
     } catch (e: any) {
@@ -315,7 +322,7 @@ export default function Dashboard() {
         {connected && (
           <div style={{ display: "flex", justifyContent: "center", gap: 16, marginBottom: 40 }}>
             <button
-              onClick={() => { setMintOpen(true); setMintResult(null); setAdaInput(""); }}
+              onClick={() => { setMintOpen(true); setMintResult(null); setAdaInput(""); setCropInput(""); }}
               style={{
                 background: "linear-gradient(135deg, #0071e3, #30d158)",
                 border: "none",
@@ -492,13 +499,28 @@ export default function Dashboard() {
               Mint Synth-USD
             </h2>
             <p style={{ color: "#98989d", fontSize: 13, marginBottom: 20 }}>
-              Ingresa cuánto ADA deseas depositar
+              ¿Qué cultivo y cuántos tokens querés emitir?
             </p>
+
+            <input
+              type="text"
+              placeholder="Cultivo (ej: Arroz, Soja, Maíz)"
+              value={cropInput}
+              onChange={(e) => setCropInput(e.target.value)}
+              style={{
+                width: "100%", boxSizing: "border-box",
+                background: "rgba(255,255,255,0.06)",
+                border: "1px solid rgba(255,255,255,0.12)",
+                borderRadius: 12, padding: "12px 16px",
+                color: "#f5f5f7", fontSize: 16, fontFamily: ff,
+                outline: "none", marginBottom: 12,
+              }}
+            />
 
             <input
               type="number"
               min="1"
-              placeholder="Ej: 10"
+              placeholder="Cantidad de tokens (ej: 100)"
               value={adaInput}
               onChange={(e) => setAdaInput(e.target.value)}
               style={{
@@ -511,7 +533,12 @@ export default function Dashboard() {
               }}
             />
             <p style={{ color: "#98989d", fontSize: 12, marginBottom: 20 }}>
-              Precio actual: ${price.toFixed(4)} · Recibirás ≈ {adaInput ? (parseFloat(adaInput) * price * 100 / 150).toFixed(4) : "0"} synth-USD
+              {adaInput && parseFloat(adaInput) > 0
+                ? <>Necesitás depositar <span style={{ color: "#f5f5f7", fontWeight: 600 }}>
+                    {(parseFloat(adaInput) * 150 / 100 / price).toFixed(2)} ADA
+                  </span> · Precio actual: ${price.toFixed(4)}</>
+                : <>Precio actual: ${price.toFixed(4)}</>
+              }
             </p>
 
             {mintResult && (
@@ -539,7 +566,7 @@ export default function Dashboard() {
               </button>
               <button
                 onClick={handleMint}
-                disabled={mintLoading || !adaInput}
+                disabled={mintLoading || !adaInput || !cropInput.trim()}
                 style={{
                   flex: 1, padding: "12px 0", borderRadius: 12,
                   background: mintLoading ? "rgba(0,113,227,0.5)" : "linear-gradient(135deg, #0071e3, #30d158)",

@@ -62,7 +62,8 @@ export async function buildMintTx(
   adaToDeposit: bigint,
   pythHex: string,
   adaUsdPrice: number,
-  blockfrostKey: string
+  blockfrostKey: string,
+  assetNameHex: string = ""
 ): Promise<string> {
   const provider = new BlockfrostProvider(blockfrostKey);
   const { scriptCbor, scriptHash, poolAddress } = getScript();
@@ -189,7 +190,7 @@ export async function buildMintTx(
 
     // Mint synth tokens.
     .mintPlutusScriptV3()
-    .mint(mintAmount.toString(), scriptHash, "")
+    .mint(mintAmount.toString(), scriptHash, assetNameHex)
     .mintingScript(scriptCbor)
     .mintRedeemerValue(mintRedeemer, "Mesh", exMint)
 
